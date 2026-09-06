@@ -107,7 +107,7 @@ def reject_live(info: dict, *, incomplete: bool = False):
     return None
 
 
-def download_source(url: str, stage: Path) -> tuple[dict, Path]:
+def download_source(url: str, stage: Path, on_progress=None) -> tuple[dict, Path]:
     runtime = next((name for name in ("deno", "node") if shutil.which(name)), None)
     if runtime is None:
         raise RuntimeError("YouTube needs Deno or Node.js. Install Node 22+ (or Deno) and try again.")
@@ -119,6 +119,13 @@ def download_source(url: str, stage: Path) -> tuple[dict, Path]:
         "js_runtimes": {runtime: {"path": shutil.which(runtime)}},
         "socket_timeout": 30,
     }
+    if on_progress:
+        def progress(data):
+            total = data.get("total_bytes") or data.get("total_bytes_estimate")
+            percent = min(100, round(data.get("downloaded_bytes", 0) / total * 100)) if total else None
+            on_progress({"status": "downloading", "progress": percent,
+                         "title": clean(data.get("info_dict", {}).get("title"))})
+        options.update(progress_hooks=[progress], quiet=True, noprogress=True)
     with YoutubeDL(options) as downloader:
         info = downloader.extract_info(url, download=True)
         if not info or info.get("_type") in {"playlist", "multi_video"} or reject_live(info):
@@ -154,7 +161,7 @@ def publish_mp3(source: Path, destination: Path) -> None:
             raise
 
 
-def import_video(value: str, root: Path, overrides: dict) -> Path:
+def import_video(value: str, root: Path, overrides: dict, *, on_progress=None) -> Path:
     url, video_id = youtube_url(value)
     for binary in ("ffmpeg", "ffprobe"):
         if not shutil.which(binary):
@@ -164,6 +171,8 @@ def import_video(value: str, root: Path, overrides: dict) -> Path:
     with library_lock(root):
         existing = next((p for p in audio_files(root) if p.name.endswith(f"[{video_id}].mp3")), None)
         if existing:
+            if on_progress:
+                on_progress({"status": "skipped", "path": str(existing), "title": existing.stem})
             print(f"Already downloaded: {existing}\nTo correct tags, edit metadata.csv and run music_pipeline.py apply --overwrite.")
             return existing
         archive = root / "_sources" / video_id
@@ -171,8 +180,10 @@ def import_video(value: str, root: Path, overrides: dict) -> Path:
             raise RuntimeError(f"A source archive already exists at {archive}. Inspect it before retrying; nothing was overwritten.")
         with tempfile.TemporaryDirectory(prefix=".youtube-", dir=root) as work:
             stage = Path(work)
-            info, source = download_source(url, stage)
+            info, source = download_source(url, stage, on_progress) if on_progress else download_source(url, stage)
             tags = metadata_from_video(info, url, overrides)
+            if on_progress:
+                on_progress({"status": "tagging", "progress": None, "title": tags["title"], "artist": tags["artist"]})
             mp3 = stage / "track.mp3"
             make_mp3(source, mp3)
             embed_tags(mp3, tags, url, video_id)
@@ -194,6 +205,9 @@ def import_video(value: str, root: Path, overrides: dict) -> Path:
             shutil.move(str(stage / "metadata.json"), archive / "metadata.json")
             publish_mp3(mp3, destination)
             write_manifest(root)
+        if on_progress:
+            on_progress({"status": "review" if folder == "_inbox" else "saved", "progress": 100,
+                         "path": str(destination), "title": tags["title"], "artist": tags["artist"]})
         print(f"\nSaved: {destination}\nArtist: {tags['artist'] or '(needs review)'}\nTitle: {tags['title'] or '(needs review)'}")
         print(f"Original source preserved: {archive}")
         if folder == "_inbox":

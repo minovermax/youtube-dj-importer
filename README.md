@@ -1,6 +1,6 @@
 # YouTube DJ Importer
 
-Paste one YouTube video link. Get a tagged MP3 in a folder you choose, with the original downloaded source preserved separately. Designed for a small local rekordbox library, including remixes that are not in music databases.
+Paste one or several YouTube video links. Get tagged MP3s in a folder you choose, with the original downloaded sources preserved separately. Designed for a small local rekordbox library, including remixes that are not in music databases.
 
 Use only for audio you own or have permission to download. This tool does not grant download or public-performance rights.
 
@@ -20,6 +20,28 @@ python3 -m venv .venv
 ```
 
 ## Download
+
+### Small batch UI
+
+On macOS, double-click **Open minsmix.command**. A Korean-language browser UI opens locally at `http://127.0.0.1:8765`:
+
+1. Paste up to 50 video links, one per line.
+2. Choose a download folder with the native folder picker, or type its path.
+3. Start the batch. Track each download, open result folders, and retry failed items.
+
+Links run sequentially; one failure does not stop the others. Duplicate links in the queue are skipped. You can add more links while a batch runs, cancel waiting items without interrupting the current download, or clear finished history without deleting files. Unrecognized artist information still goes to `_inbox` for CSV review.
+
+The UI requires no extra packages, account, or hosted server. It binds only to `127.0.0.1`, checks request Host/Origin and a per-session token, and never serves music files over HTTP. Keep the launcher/terminal window open while downloading. Closing the browser does not stop the queue. Ctrl+C cancels waiting items and waits for the current import to finish before exiting. Queue history is in memory and resets when the server restarts; downloaded files remain on disk. Your last-used folder is stored only in your browser.
+
+```sh
+.venv/bin/python ui_server.py
+# Custom starting folder / alternate port / no automatic browser launch
+.venv/bin/python ui_server.py --root '/path/to/DJ Music' --port 8766 --no-browser
+```
+
+Launching the UI again reopens the existing instance. If another program occupies the default port, choose another port. To correct inferred tags, use the CSV workflow below; the UI does not yet include a tag editor.
+
+### Single-link launcher and CLI
 
 On macOS, double-click **Download YouTube.command**. Choose a download folder or press Enter for `~/Music/minsmix`, then paste a link. Finder reveals the finished MP3. Run the launcher from this repository; do not move it away from the Python files.
 
@@ -80,6 +102,7 @@ Import files from `tracks` into rekordbox. If they were already imported, use re
 
 ```sh
 .venv/bin/python test_import.py
+.venv/bin/python test_ui.py
 .venv/bin/python music_pipeline.py test
 
 # YouTube changes frequently; update the downloader if extraction breaks

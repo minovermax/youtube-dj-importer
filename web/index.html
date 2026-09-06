@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="api-token" content="__API_TOKEN__">
+  <title>minsmix — 라이브러리 준비</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <div class="app-shell">
+    <header class="topbar">
+      <a href="/" class="brand" aria-label="minsmix 홈"><span class="brand-mark" aria-hidden="true"><i></i><i></i><i></i><i></i></span>minsmix<span class="brand-label">LIBRARY TOOLS</span></a>
+      <span class="connection" id="connection" role="status"><span class="status-dot"></span><span id="connection-text">연결 중</span></span>
+    </header>
+
+    <main>
+      <section class="intro" aria-labelledby="page-title">
+        <p class="eyebrow">LESS PREP. MORE PLAY.</p>
+        <h1 id="page-title">링크를 모아, 한 번에.</h1>
+        <p class="intro-copy">링크만 모아두세요. 다운로드와 태그 정리는 minsmix가 할게요.</p>
+      </section>
+
+      <div class="workspace">
+        <section class="composer" aria-labelledby="add-title">
+          <div class="section-heading"><h2 id="add-title">음악 가져오기</h2><span class="step-label">01 / ADD</span></div>
+          <form id="import-form">
+            <div class="label-row"><label for="links">YouTube 링크</label><span id="link-count">0 / 50</span></div>
+            <textarea id="links" rows="7" placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…&#10;&#10;한 줄에 링크 하나씩 붙여넣으세요." spellcheck="false" autocomplete="off" aria-describedby="links-help"></textarea>
+            <p class="field-help" id="links-help">여러 곡을 한 번에. 중복 링크는 알아서 건너뛰어요.</p>
+
+            <div class="folder-label"><label for="folder">저장 폴더</label><button type="button" class="text-button" id="choose-folder">폴더 선택</button></div>
+            <input type="text" id="folder" autocomplete="off" spellcheck="false" aria-describedby="folder-help" placeholder="~/Music/minsmix">
+            <p class="field-help" id="folder-help">완료한 곡은 <code>tracks</code>, 확인이 필요한 곡은 <code>_inbox</code>로.</p>
+            <button class="primary-button" id="submit" type="submit" disabled><span id="submit-label">다운로드 시작</span><span aria-hidden="true">↗</span></button>
+            <p id="form-message" class="form-message" role="status" hidden></p>
+          </form>
+          <div class="format-note"><span class="format-chip">MP3</span><div><strong>원본 보관 · 메타데이터 자동 기록</strong><p>리믹스 이름은 그대로, 모르는 정보는 빈칸으로.</p></div></div>
+        </section>
+
+        <section class="queue-panel" aria-labelledby="queue-title">
+          <div class="section-heading"><h2 id="queue-title">다운로드 목록 <span class="count-badge" id="job-count">0</span></h2><span class="step-label">02 / COLLECT</span></div>
+          <div class="queue-toolbar"><p id="queue-summary" role="status">아직 추가한 곡이 없어요</p><div class="queue-actions"><button type="button" id="cancel-waiting" class="text-button" hidden>대기 취소</button><button type="button" id="clear-finished" class="text-button" hidden>완료 목록 비우기</button></div></div>
+          <div id="empty-state" class="empty-state">
+            <div class="record" aria-hidden="true"><span></span></div>
+            <h3>새로운 셋의 시작.</h3>
+            <p>마음에 드는 곡의 링크를 추가해 보세요.<br>준비가 끝나면 여기에 차곡차곡 쌓여요.</p>
+          </div>
+          <ol id="jobs" class="jobs" aria-label="곡별 다운로드 상태"></ol>
+          <div class="queue-footer"><span>준비가 끝나면 rekordbox로 가져오세요.</span><button type="button" id="open-folder" class="folder-button">저장 폴더 열기 <span aria-hidden="true">↗</span></button></div>
+        </section>
+      </div>
+
+      <aside class="good-to-know"><span class="note-label">GOOD TO KNOW</span><p>320 kbps 변환이 원본 음질을 높여주지는 않아요. 다운로드 권한이 있는 음악에 사용해 주세요.</p></aside>
+    </main>
+    <footer class="page-footer"><span>Built for your next set.</span><span>내 컴퓨터에서만 실행 · 실행 창을 열어두세요</span></footer>
+  </div>
+  <template id="job-template">
+    <li class="job">
+      <span class="job-number" aria-hidden="true"></span>
+      <div class="job-content"><div class="job-topline"><h3 class="job-title"></h3><span class="job-status"></span></div><p class="job-detail"></p><progress class="job-progress" max="100" aria-label="다운로드 진행률" hidden></progress><p class="job-error" hidden></p><div class="job-actions"><a class="source-link" target="_blank" rel="noopener noreferrer">원본 링크 ↗</a><button type="button" class="text-button job-open" hidden>파일 위치</button><button type="button" class="text-button job-retry" hidden>다시 시도</button></div></div>
+    </li>
+  </template>
+</body>
+</html>
