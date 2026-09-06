@@ -1,0 +1,91 @@
+# YouTube DJ Importer
+
+Paste one YouTube video link. Get a tagged MP3 in a folder you choose, with the original downloaded source preserved separately. Designed for a small local rekordbox library, including remixes that are not in music databases.
+
+Use only for audio you own or have permission to download. This tool does not grant download or public-performance rights.
+
+## Setup
+
+Requires Python 3.10+, FFmpeg and Node.js 22+ (or Deno). macOS and Linux are supported; the double-click launcher is macOS-only.
+
+```sh
+git clone https://github.com/minovermax/youtube-dj-importer.git
+cd youtube-dj-importer
+
+# macOS: install missing system dependencies
+brew install python ffmpeg node
+
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+```
+
+## Download
+
+On macOS, double-click **Download YouTube.command**. Choose a download folder or press Enter for `~/Music/minsmix`, then paste a link. Finder reveals the finished MP3. Run the launcher from this repository; do not move it away from the Python files.
+
+Or use the command line:
+
+```sh
+.venv/bin/python youtube_import.py 'https://www.youtube.com/watch?v=VIDEO_ID'
+
+# Choose any library/download folder
+.venv/bin/python youtube_import.py 'YOUTUBE_URL' --output '/path/to/DJ Music'
+
+# Correct an ambiguous title at download time
+.venv/bin/python youtube_import.py 'YOUTUBE_URL' \
+  --artist 'Artist Name' --title 'Song (DJ Remix)' --genre 'Drum & Bass'
+```
+
+`--root` is an alias for `--output`. `--album` is also available. Omit the URL to paste it at a prompt. Add `--open` to reveal the result in Finder. Playlist parameters are discarded; only one video is downloaded. Live/upcoming streams are rejected. Repeating the same video ID skips the download; it does not retag the existing file.
+
+## What gets saved
+
+```text
+your-download-folder/
+  tracks/             tagged MP3s with Artist and Title
+  _inbox/             MP3s missing Artist or Title, for review
+  _sources/VIDEO_ID/  original source audio and provenance JSON
+  metadata.csv        editable review sheet
+```
+
+- **Artist / Title:** parsed from `Artist - Title`, retaining remix/edit names. Otherwise Artist comes from YouTube's structured artist field and Title from the video title. The channel/uploader is never used as the artist fallback. Title parsing is a heuristic, not verified song identification.
+- **Album:** only taken from a structured YouTube album field when its track title matches the selected title. Unknown albums stay blank. No invented album or release year.
+- **Genre:** blank unless provided explicitly; no audio-based genre guessing.
+- **Comment:** source URL, original video title, channel, metadata provenance, and any missing-field warning. Source URL and video ID also get their own ID3 fields.
+
+The MP3 carries ID3v2.3 tags; metadata is not just a sidecar. Upload date stays in provenance JSON, not the release-year tag. Artwork, BPM, key detection, fingerprint lookup, and direct rekordbox-database changes are intentionally out of scope. Use rekordbox analysis for BPM/key and check beatgrids by ear.
+
+Quality: yt-dlp selects the best available audio stream. Non-MP3 sources are encoded once to 320 kbps MP3 for compatibility; an MP3 source is copied without re-encoding. **320 kbps does not restore detail lost by YouTube.** The original stream remains in `_sources` if you want it later. Prefer a creator's original WAV/AIFF/FLAC download for performance use when available. No cookies, accounts or browser history are accessed.
+
+## Review or correct metadata
+
+Edit `metadata.csv`, keeping filenames unchanged, then run:
+
+```sh
+# Fill empty tags; move reviewed files from _inbox to tracks
+.venv/bin/python music_pipeline.py apply
+
+# Apply deliberate corrections to already-filled tags
+.venv/bin/python music_pipeline.py apply --overwrite
+
+# Refresh the sheet after adding local MP3s
+.venv/bin/python music_pipeline.py scan
+```
+
+For a custom library add `--root '/path/to/DJ Music'` to these commands too. Existing CSV edits take precedence during a scan. Empty cells do not erase existing tags, even with `--overwrite`. Back up your library before bulk edits. `_sources` and hidden staging folders are excluded from scans. Do not edit the CSV while a download/import is running.
+
+Import files from `tracks` into rekordbox. If they were already imported, use rekordbox's tag-reload command to refresh its cached metadata. File moves can require relocation in rekordbox; this tool never edits its database.
+
+## Checks and troubleshooting
+
+```sh
+.venv/bin/python test_import.py
+.venv/bin/python music_pipeline.py test
+
+# YouTube changes frequently; update the downloader if extraction breaks
+.venv/bin/python -m pip install --upgrade 'yt-dlp[default]'
+```
+
+The checks are offline and use generated audio, not copyrighted songs. YouTube may block some networks, videos, or automated requests; private, unavailable, age-restricted, or region-blocked videos may fail. No existing track is replaced on failure. Interrupted downloads are cleaned out of staging; if publishing an import is interrupted, inspect the named `_sources/VIDEO_ID` archive before retrying. If an MP3 exists but CSV writing failed, run `music_pipeline.py scan` to recover the sheet.
+
+Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp), [FFmpeg](https://ffmpeg.org/) and [Mutagen](https://mutagen.readthedocs.io/). Local audio, metadata sheets, browser cookies and the virtual environment are excluded from Git.
