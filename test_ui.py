@@ -1,6 +1,7 @@
 """Offline check of the HTTP boundary and mixed-success batch queue."""
 
 import json
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -11,6 +12,10 @@ from urllib.request import Request, urlopen
 from unittest.mock import patch
 
 import ui_server
+import music_pipeline
+from mutagen.id3 import GEOB, ID3
+from test_import import audio_hash
+from youtube_import import embed_tags
 
 
 def check():
@@ -19,6 +24,8 @@ def check():
         entered, release = threading.Event(), threading.Event()
         calls = []
         attempts = {}
+        tone = root / ".test-tone.mp3"
+        subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", str(tone)], check=True)
 
         def fake_import(url, folder, overrides, *, on_progress):
             video_id = url.split("v=")[1]
@@ -34,7 +41,9 @@ def check():
             folder = folder / ("_inbox" if video_id == "ccccccccccc" else "tracks")
             folder.mkdir(exist_ok=True)
             path = folder / f"test [{video_id}].mp3"
-            path.write_bytes(b"Test-only sentinel, not audio")
+            shutil.copy2(tone, path)
+            embed_tags(path, {"artist": "" if video_id == "ccccccccccc" else "Artist", "title": "Original (Remix)",
+                             "album": "Unverified album", "genre": "", "comment": f"Source: {url} | Video title: Original (Remix) | Metadata: needs review | Review: missing artist"}, url, video_id)
             on_progress({"status": "review" if video_id == "ccccccccccc" else "saved", "path": str(path)})
             return path
 
@@ -103,9 +112,58 @@ def check():
                 wait_idle()
                 assert server.batch.snapshot()["jobs"][1]["status"] == "saved"
                 assert request("/api/retry", {"id": []})[0] == 400
+                review_path = root / "_inbox" / "test [ccccccccccc].mp3"
+                first_path = root / "tracks" / "test [aaaaaaaaaaa].mp3"
+                music_pipeline.write_manifest(root)
+                draft = music_pipeline.load_manifest(root / "metadata.csv")[first_path.name]
+                draft["genre"] = "Other pending CSV edit"
+                music_pipeline.write_manifest(root, {first_path.name: draft})
+                custom = ID3(review_path)
+                custom.add(GEOB(encoding=1, mime="application/octet-stream", filename="", desc="Serato Markers2", data=b"keep-my-cues"))
+                custom.save(review_path, v2_version=3)
+                original_audio = audio_hash(review_path)
+                other_file = first_path.read_bytes()
+                selection = {"root": str(root), "path": str(review_path), "video_id": "ccccccccccc"}
+                assert request("/api/tag-read", selection, authenticated=False)[0] == 403
+                assert request("/api/tag-read", {**selection, "path": "../../outside.mp3"})[0] == 400
+                assert request("/api/library", {"root": str(root)})[0] == 200
+                review = json.loads(request("/api/tag-read", selection)[1])
+                assert review["tags"]["artist"] == "" and review["source_url"].endswith("ccccccccccc")
+                values = {"artist": "Producer", "title": "Original (DJ Remix)", "album": "", "genre": "Drum & Bass"}
+                assert request("/api/tag-save", {**selection, "revision": review["revision"], "tags": {**values, "artist": " "}})[0] == 400
+                code, body, _ = request("/api/tag-save", {**selection, "revision": review["revision"], "tags": values})
+                assert code == 200, body
+                saved = json.loads(body)
+                saved_path = Path(saved["path"])
+                assert saved_path.parent == root / "tracks" and not review_path.exists()
+                assert saved["status"] == "saved" and saved["tags"] == values
+                assert Path(saved["backup"]).is_dir()
+                assert audio_hash(saved_path) == original_audio
+                assert first_path.read_bytes() == other_file
+                assert ID3(saved_path)["GEOB:Serato Markers2"].data == b"keep-my-cues"
+                assert str(ID3(saved_path)["TXXX:YouTube ID"]) == "ccccccccccc"
+                assert "TALB" not in ID3(saved_path), "An explicitly cleared album must be removed"
+                assert music_pipeline.load_manifest(root / "metadata.csv")[first_path.name]["genre"] == "Other pending CSV edit"
+                assert request("/api/tag-save", {**selection, "path": str(saved_path), "revision": review["revision"], "tags": values})[0] == 400
+                assert any(job["status"] == "saved" and job["path"] == str(saved_path) for job in server.batch.snapshot()["jobs"])
+                renamed = saved_path.with_name("renamed.mp3")
+                saved_path.rename(renamed)
+                reloaded = json.loads(request("/api/tag-read", {**selection, "path": str(saved_path)})[1])
+                assert reloaded["path"] == str(renamed) and reloaded["tags"]["artist"] == "Producer"
+
+                rollback = root / "_inbox" / "rollback.mp3"
+                shutil.copy2(tone, rollback)
+                music_pipeline.write_manifest(root)
+                rollback_bytes, csv_bytes = rollback.read_bytes(), (root / "metadata.csv").read_bytes()
+                rollback_view = json.loads(request("/api/tag-read", {"root": str(root), "path": str(rollback)})[1])
+                with patch.object(music_pipeline, "write_manifest", side_effect=RuntimeError("Simulated CSV failure")):
+                    code, body, _ = request("/api/tag-save", {"root": str(root), "path": str(rollback), "revision": rollback_view["revision"], "tags": values})
+                assert code == 400 and "복원" in json.loads(body)["error"]
+                assert rollback.read_bytes() == rollback_bytes and (root / "metadata.csv").read_bytes() == csv_bytes
+                assert not (root / "tracks" / rollback.name).exists()
                 assert request("/api/clear", {})[0] == 200
                 assert server.batch.snapshot()["jobs"] == []
-                assert len(list(root.rglob("*.mp3"))) == 3, "Clearing history must not delete audio"
+                assert len(music_pipeline.audio_files(root)) == 4, "Clearing history must not delete audio or scan backups"
 
                 entered.clear()
                 release.clear()
@@ -125,7 +183,7 @@ def check():
                 server.shutdown()
                 server.server_close()
                 serving.join(timeout=5)
-    print("PASS: local HTTP auth, origin/Host checks, static-file boundaries, mixed links, sequential queue, failure isolation, retry, cancellation, non-destructive history clearing.")
+    print("PASS: HTTP auth, path boundaries, queue/retry/cancel, tag editing, blank album removal, source/cue preservation, unchanged audio, per-file CSV sync, backup/rollback, stale-edit protection, renamed-file recovery.")
 
 
 if __name__ == "__main__":

@@ -42,7 +42,7 @@
 
         <section class="queue-panel" aria-labelledby="queue-title">
           <div class="section-heading"><h2 id="queue-title">다운로드 목록 <span class="count-badge" id="job-count">0</span></h2><span class="step-label">02 / COLLECT</span></div>
-          <div class="queue-toolbar"><p id="queue-summary" role="status">아직 추가한 곡이 없어요</p><div class="queue-actions"><button type="button" id="cancel-waiting" class="text-button" hidden>대기 취소</button><button type="button" id="clear-finished" class="text-button" hidden>완료 목록 비우기</button></div></div>
+          <div class="queue-toolbar"><p id="queue-summary" role="status">아직 추가한 곡이 없어요</p><div class="queue-actions"><button type="button" id="load-library" class="text-button">라이브러리 불러오기</button><button type="button" id="cancel-waiting" class="text-button" hidden>대기 취소</button><button type="button" id="clear-finished" class="text-button" hidden>완료 목록 비우기</button></div></div>
           <div id="empty-state" class="empty-state">
             <div class="record" aria-hidden="true"><span></span></div>
             <h3>새로운 셋의 시작.</h3>
@@ -60,8 +60,28 @@
   <template id="job-template">
     <li class="job">
       <span class="job-number" aria-hidden="true"></span>
-      <div class="job-content"><div class="job-topline"><h3 class="job-title"></h3><span class="job-status"></span></div><p class="job-detail"></p><progress class="job-progress" max="100" aria-label="다운로드 진행률" hidden></progress><p class="job-error" hidden></p><div class="job-actions"><a class="source-link" target="_blank" rel="noopener noreferrer">원본 링크 ↗</a><button type="button" class="text-button job-open" hidden>파일 위치</button><button type="button" class="text-button job-retry" hidden>다시 시도</button></div></div>
+      <div class="job-content"><div class="job-topline"><h3 class="job-title"></h3><button type="button" class="job-status"></button></div><p class="job-detail"></p><progress class="job-progress" max="100" aria-label="다운로드 진행률" hidden></progress><p class="job-error" hidden></p><div class="job-actions"><a class="source-link" target="_blank" rel="noopener noreferrer">원본 링크 ↗</a><button type="button" class="text-button job-edit" hidden>태그 수정</button><button type="button" class="text-button job-open" hidden>파일 위치</button><button type="button" class="text-button job-retry" hidden>다시 시도</button></div></div>
     </li>
   </template>
+  <dialog id="tag-dialog" aria-labelledby="tag-heading" aria-describedby="tag-help">
+    <header class="editor-heading"><div><p class="eyebrow">TRACK DETAILS</p><h2 id="tag-heading">태그 확인·수정</h2></div><button type="button" class="text-button" id="tag-close">닫기</button></header>
+    <p class="editor-help" id="tag-help">원본 영상의 제목·설명에서 실제 아티스트와 곡명을 확인해 주세요. 채널 이름이 아티스트 이름과 같지는 않을 수 있어요.</p>
+    <p id="tag-loading" role="status">MP3에 저장된 정보를 불러오는 중…</p>
+    <form id="tag-form">
+      <fieldset id="tag-fields" disabled>
+        <div class="source-context"><span class="note-label">SOURCE</span><p id="tag-original"></p><a id="tag-source" target="_blank" rel="noopener noreferrer" hidden>원본 영상에서 확인 ↗</a><p id="tag-filename" class="editor-filename"></p></div>
+        <p id="tag-csv-note" class="editor-help" hidden>메타데이터 표에 먼저 수정해 둔 값을 불러왔어요. 저장하면 MP3에도 반영돼요.</p>
+        <div class="editor-grid">
+          <div><label for="tag-artist">아티스트 <span class="required-label">필수</span></label><input id="tag-artist" name="artist" required maxlength="512" autocomplete="off" placeholder="실제 아티스트 이름"></div>
+          <div><label for="tag-title">제목 <span class="required-label">필수</span></label><input id="tag-title" name="title" required maxlength="512" autocomplete="off" placeholder="곡명 (Remix / Edit)"></div>
+          <div><label for="tag-album">앨범 <span class="optional-label">선택</span></label><input id="tag-album" name="album" maxlength="512" autocomplete="off" placeholder="모르면 비워두세요"></div>
+          <div><label for="tag-genre">장르 <span class="optional-label">선택</span></label><input id="tag-genre" name="genre" maxlength="512" autocomplete="off" placeholder="예: Drum & Bass"></div>
+        </div>
+        <p class="editor-help">리믹스·에디트 이름은 제목에 남겨주세요. 앨범·장르를 비우고 저장하면 기존 값도 지워져요.</p>
+      </fieldset>
+      <p id="tag-error" class="form-message" data-error="true" role="alert" hidden></p>
+      <footer class="editor-footer"><p>MP3와 CSV를 함께 저장해요.<br>음원은 그대로, 수정 전 파일은 자동 백업.</p><button type="submit" class="primary-button" id="tag-save" disabled>확인하고 저장</button></footer>
+    </form>
+  </dialog>
 </body>
 </html>

@@ -9,6 +9,9 @@ let submitting = false;
 let initialized = false;
 let latest = [];
 const rows = new Map();
+let editing = null;
+let editorSerial = 0;
+let savingTags = false;
 
 async function api(path, data) {
   const response = await fetch(`/api/${path}`, {
@@ -49,6 +52,7 @@ function render(state) {
     $("#folder").value = folder || state.root;
     $("#choose-folder").hidden = !state.picker;
     initialized = true;
+    queueMicrotask(() => loadLibrary(true));
   }
   const ids = new Set(latest.map((job) => job.id));
   for (const [id, row] of rows) {
@@ -67,7 +71,11 @@ function render(state) {
     row.querySelector(".job-title").textContent = job.title || "YouTube 오디오";
     const percent = job.status === "downloading" && job.progress !== null ? ` ${job.progress}%` : "";
     row.querySelector(".job-status").textContent = labels[job.status] + percent;
-    const detail = job.status === "queued" ? "앞의 곡이 끝나면 자동으로 시작해요" : job.status === "tagging" ? "MP3로 변환하고 메타데이터를 기록하고 있어요" : job.status === "review" ? "아티스트 확인 필요 · _inbox에 저장했어요" : job.status === "skipped" ? "같은 영상의 파일이 있어 건너뛰었어요" : job.status === "cancelled" ? "다운로드 전 대기 목록에서 취소했어요" : job.artist || (job.status === "downloading" ? "YouTube에서 최상의 오디오 소스를 가져오는 중" : "");
+    const editable = Boolean(job.path) && !active.has(job.status);
+    row.querySelector(".job-status").disabled = !editable;
+    row.querySelector(".job-edit").hidden = !editable;
+    row.querySelector(".job-edit").textContent = job.status === "review" ? "태그 확인하기" : "태그 수정";
+    const detail = job.status === "queued" ? "앞의 곡이 끝나면 자동으로 시작해요" : job.status === "tagging" ? "MP3로 변환하고 메타데이터를 기록하고 있어요" : job.status === "review" ? "원본을 확인하고 태그를 저장해 주세요" : job.status === "skipped" ? "같은 영상의 파일이 있어 건너뛰었어요" : job.status === "cancelled" ? "다운로드 전 대기 목록에서 취소했어요" : job.artist || (job.status === "downloading" ? "YouTube에서 최상의 오디오 소스를 가져오는 중" : "");
     row.querySelector(".job-detail").textContent = detail;
     const progress = row.querySelector(".job-progress");
     progress.hidden = !["downloading", "tagging"].includes(job.status);
@@ -78,6 +86,7 @@ function render(state) {
     error.hidden = !job.error;
     const link = row.querySelector(".source-link");
     link.href = job.url;
+    link.hidden = !job.url;
     link.setAttribute("aria-label", `${job.title} 원본 링크 열기`);
     row.querySelector(".job-open").hidden = !job.path;
     row.querySelector(".job-retry").hidden = !["error", "cancelled"].includes(job.status);
@@ -162,13 +171,95 @@ $("#jobs").addEventListener("click", async (event) => {
   if (!button) return;
   const job = latest.find((item) => item.id === button.closest(".job").dataset.id);
   if (!job) return;
-  if (button.classList.contains("job-open")) {
+  if (button.classList.contains("job-edit") || button.classList.contains("job-status")) {
+    await openEditor(job);
+  } else if (button.classList.contains("job-open")) {
     await openFolder(job.path.slice(0, job.path.lastIndexOf("/")));
   } else if (button.classList.contains("job-retry")) {
     button.disabled = true;
     try { await api("retry", { id: job.id }); await refresh(); }
     catch (error) { message(error.message, true); }
     finally { button.disabled = false; }
+  }
+});
+
+async function loadLibrary(quiet = false) {
+  const button = $("#load-library");
+  if (button.disabled) return;
+  button.disabled = true;
+  button.textContent = "불러오는 중…";
+  try {
+    const result = await api("library", {root: $("#folder").value});
+    if (!quiet) message(`라이브러리 ${result.count}곡을 불러왔어요. ‘태그 확인하기’ 또는 ‘태그 수정’을 눌러보세요.`);
+    await refresh();
+  } catch (error) { if (!quiet) message(error.message, true); }
+  finally { button.disabled = false; button.textContent = "라이브러리 불러오기"; }
+}
+$("#load-library").addEventListener("click", () => loadLibrary());
+
+function editorError(text) {
+  $("#tag-error").textContent = text;
+  $("#tag-error").hidden = !text;
+}
+
+async function openEditor(job) {
+  const request = ++editorSerial;
+  editing = null;
+  $("#tag-form").reset();
+  editorError("");
+  $("#tag-fields").disabled = true;
+  $("#tag-save").disabled = true;
+  $("#tag-loading").hidden = false;
+  $("#tag-original").textContent = "";
+  $("#tag-filename").textContent = "";
+  $("#tag-source").hidden = true;
+  $("#tag-csv-note").hidden = true;
+  $("#tag-dialog").showModal();
+  try {
+    const videoId = job.url ? new URL(job.url).searchParams.get("v") || "" : "";
+    const result = await api("tag-read", {root: job.root, path: job.path, video_id: videoId});
+    if (request !== editorSerial || !$("#tag-dialog").open) return;
+    editing = result;
+    for (const field of ["artist", "title", "album", "genre"]) $(`#tag-${field}`).value = result.tags[field] || "";
+    $("#tag-original").textContent = result.video_title || "저장된 원본 영상 제목이 없어요. 파일명과 보유한 곡 정보를 확인해 주세요.";
+    $("#tag-filename").textContent = result.path.split("/").pop();
+    $("#tag-source").hidden = !result.source_url;
+    $("#tag-source").href = result.source_url;
+    $("#tag-csv-note").hidden = !result.csv_pending;
+    $("#tag-fields").disabled = false;
+    $("#tag-save").disabled = false;
+    $("#tag-artist").focus();
+    await refresh();
+  } catch (error) { if (request === editorSerial) editorError(error.message); }
+  finally { if (request === editorSerial) $("#tag-loading").hidden = true; }
+}
+
+$("#tag-close").addEventListener("click", () => { if (!savingTags) $("#tag-dialog").close(); });
+$("#tag-dialog").addEventListener("cancel", (event) => { if (savingTags) event.preventDefault(); });
+$("#tag-dialog").addEventListener("close", () => { ++editorSerial; editing = null; });
+$("#tag-form").addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (!editing || savingTags) return;
+  const tags = Object.fromEntries(["artist", "title", "album", "genre"].map((field) => [field, $(`#tag-${field}`).value.trim()]));
+  if (!tags.artist || !tags.title) { editorError("아티스트와 제목을 입력해 주세요."); return; }
+  savingTags = true;
+  $("#tag-save").disabled = true;
+  $("#tag-close").disabled = true;
+  $("#tag-fields").disabled = true;
+  $("#tag-save").textContent = "저장 중…";
+  editorError("");
+  try {
+    const result = await api("tag-save", {root: editing.root, path: editing.path, video_id: editing.video_id, revision: editing.revision, tags});
+    $("#tag-dialog").close();
+    message(`‘${result.tags.title}’ 태그를 MP3와 CSV에 저장했어요.${result.path !== result.previous_path ? " tracks 폴더로 옮겼어요." : ""} 수정 전 파일은 .tag-backups에 보관했어요.`);
+    await refresh();
+  } catch (error) { editorError(error.message); }
+  finally {
+    savingTags = false;
+    $("#tag-save").disabled = false;
+    $("#tag-close").disabled = false;
+    $("#tag-fields").disabled = false;
+    $("#tag-save").textContent = "확인하고 저장";
   }
 });
 poll();

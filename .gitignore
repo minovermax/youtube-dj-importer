@@ -17,6 +17,7 @@ __pycache__/
 cookies*.txt
 metadata.csv
 .music.lock
+.tag-backups/
 .youtube-*/
 _sources/
 _inbox/

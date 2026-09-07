@@ -77,12 +77,12 @@ def metadata_from_video(info: dict, url: str, overrides: dict) -> dict[str, str]
     return tags
 
 
-def filename_for(tags: dict, video_id: str) -> str:
+def filename_for(tags: dict) -> str:
     name = f"{tags['artist']} - {tags['title']}" if tags["artist"] else tags["title"] or "Untitled"
     name = re.sub(r'[<>:"/\\|?*\x00-\x1f\x7f]', "_", name).strip(" .") or "Untitled"
-    # Leave room for the stable ID and extension within common filesystem byte limits.
+    # Leave room for a collision counter and extension within filesystem byte limits.
     name = name.encode("utf-8")[:200].decode("utf-8", errors="ignore").rstrip(" .")
-    return f"{name} [{video_id}].mp3"
+    return f"{name}.mp3"
 
 
 def embed_tags(path: Path, tags: dict, url: str, video_id: str) -> None:
@@ -169,11 +169,19 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None) -
     root = root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     with library_lock(root):
-        existing = next((p for p in audio_files(root) if p.name.endswith(f"[{video_id}].mp3")), None)
+        existing = None
+        for path in audio_files(root):
+            try:
+                embedded_id = str(ID3(path).get("TXXX:YouTube ID", ""))
+            except ID3NoHeaderError:
+                embedded_id = ""
+            if embedded_id == video_id or not embedded_id and path.name.endswith(f"[{video_id}].mp3"):
+                existing = path
+                break
         if existing:
             if on_progress:
                 on_progress({"status": "skipped", "path": str(existing), "title": existing.stem})
-            print(f"Already downloaded: {existing}\nTo correct tags, edit metadata.csv and run music_pipeline.py apply --overwrite.")
+            print(f"Already downloaded: {existing}\nTo correct tags, open the UI tag editor or use metadata.csv.")
             return existing
         archive = root / "_sources" / video_id
         if archive.exists():
@@ -188,10 +196,14 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None) -
             make_mp3(source, mp3)
             embed_tags(mp3, tags, url, video_id)
             folder = "tracks" if tags["artist"] and tags["title"] else "_inbox"
-            destination = root / folder / filename_for(tags, video_id)
+            destination = root / folder / filename_for(tags)
             destination.parent.mkdir(exist_ok=True)
-            if destination.exists():
-                raise RuntimeError(f"Refusing to overwrite {destination}")
+            # CSV rows use basenames, so distinguish matching titles across both folders.
+            names = {p.name.casefold() for p in audio_files(root)}
+            stem, counter = destination.stem, 2
+            while destination.name.casefold() in names or destination.exists():
+                destination = destination.with_name(f"{stem} ({counter}).mp3")
+                counter += 1
             provenance = {key: info.get(key) for key in (
                 "id", "title", "artist", "track", "album", "channel", "uploader", "upload_date",
                 "format_id", "ext", "acodec", "abr", "asr",
@@ -211,7 +223,7 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None) -
         print(f"\nSaved: {destination}\nArtist: {tags['artist'] or '(needs review)'}\nTitle: {tags['title'] or '(needs review)'}")
         print(f"Original source preserved: {archive}")
         if folder == "_inbox":
-            print("Needs review: fill Artist/Title in metadata.csv, then run music_pipeline.py apply.")
+            print("Needs review: fill Artist/Title in the UI tag editor, or use metadata.csv and music_pipeline.py apply.")
         return destination
 
 

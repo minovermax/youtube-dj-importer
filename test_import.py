@@ -43,7 +43,7 @@ def check():
     assert importer.metadata_from_video(info, url, {"artist": "DJ", "genre": "DnB"})["artist"] == "DJ"
     assert importer.reject_live({"is_live": True})
     assert not importer.reject_live({"live_status": "was_live"})
-    assert len(importer.filename_for({"artist": "가" * 200, "title": "../../Track"}, "BaW_jenozKc").encode()) < 255
+    assert len(importer.filename_for({"artist": "가" * 200, "title": "../../Track"}).encode()) < 255
 
     with tempfile.TemporaryDirectory(prefix="youtube-dj-test-") as work:
         root = Path(work).resolve()
@@ -59,6 +59,7 @@ def check():
         with patch.object(importer, "download_source", side_effect=fake_download) as download:
             path = importer.import_video(url, root, {})
             assert path.parent == root / "tracks"
+            assert path.name == "가수 - Song (DJ Remix).mp3"
             id3 = ID3(path)
             assert id3.version == (2, 3, 0)
             assert str(id3["TPE1"]) == "가수" and str(id3["TIT2"]) == "Song (DJ Remix)"
@@ -67,6 +68,16 @@ def check():
             assert (root / "_sources" / "BaW_jenozKc" / "source.m4a").exists()
             assert importer.import_video(url, root, {}) == path
             assert download.call_count == 1
+            renamed = path.with_name("Manually renamed.mp3")
+            path.rename(renamed)
+            assert importer.import_video(url, root, {}) == renamed
+            renamed.rename(path)
+            assert download.call_count == 1
+
+        with patch.object(importer, "download_source", side_effect=fake_download):
+            same_title = importer.import_video("https://youtu.be/bbbbbbbbbbb", root, {})
+            assert same_title.name == "가수 - Song (DJ Remix) (2).mp3"
+            assert str(ID3(path)["TXXX:YouTube ID"]) == "BaW_jenozKc"
 
         before = audio_hash(path)
         with patch.object(importer.os, "link", side_effect=OSError(errno.ENOTSUP, "No hardlinks")):
@@ -81,7 +92,7 @@ def check():
                 raise AssertionError("An existing destination was overwritten")
         # An MP3 source archive must never become a second library track.
         shutil.copy2(path, root / "_sources" / "BaW_jenozKc" / "source.mp3")
-        assert pipeline.audio_files(root) == [path]
+        assert set(pipeline.audio_files(root)) == {path, same_title}
         rows = pipeline.load_manifest(root / "metadata.csv")
         assert rows[path.name]["artist"] == "가수" and rows[path.name]["album"] == ""
         rows[path.name]["genre"] = "Drum & Bass"
@@ -115,7 +126,7 @@ def check():
             else:
                 raise AssertionError("A failed download appeared successful")
         assert not list(root.glob(".youtube-*"))
-        assert len(pipeline.audio_files(root)) == 2
+        assert len(pipeline.audio_files(root)) == 3
         assert audio_hash(path) == before
     print("PASS: URL validation, remix metadata, Unicode filenames, ID3, audio conversion/copy, duplicate protection, CSV review, inbox routing, failure cleanup.")
 

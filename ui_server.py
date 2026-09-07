@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.request import urlopen
 
-from music_pipeline import DEFAULT_ROOT
+from music_pipeline import DEFAULT_ROOT, audio_files, library_lock, resolve_track, track_review, save_review
 from youtube_import import import_video, youtube_url
 
 WEB = Path(__file__).parent / "web"
@@ -132,6 +132,22 @@ class Batch:
         with self.lock:
             self.jobs = {key: job for key, job in self.jobs.items() if job["status"] in ACTIVE}
 
+    def remember_track(self, review):
+        with self.lock:
+            matching = [job for job in self.jobs.values() if job["root"] == review["root"]
+                        and (job["path"] in {review["path"], review.get("previous_path")}
+                             or review["source_url"] and job["url"] == review["source_url"])]
+            if not matching:
+                if len(self.jobs) >= 500:
+                    raise ValueError("목록이 가득 찼어요. 완료 목록을 비운 뒤 다시 불러와 주세요.")
+                job = {"id": secrets.token_hex(8), "root": review["root"]}
+                self.jobs[job["id"]] = job
+                matching = [job]
+            for job in matching:
+                if job.get("status") not in ACTIVE:
+                    job.update(status=review["status"], path=review["path"], title=review["tags"]["title"] or Path(review["path"]).stem,
+                               artist=review["tags"]["artist"], url=review["source_url"], progress=100, error="")
+
 
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *_args):
@@ -192,6 +208,27 @@ class Handler(BaseHTTPRequestHandler):
             batch = self.server.batch
             if self.path == "/api/add":
                 self.respond(200, batch.add(data.get("links"), data.get("root")))
+            elif self.path in {"/api/library", "/api/tag-read", "/api/tag-save"}:
+                root = library_path(data.get("root"))
+                if not root.is_dir():
+                    raise ValueError("음악 폴더가 아직 없어요. 저장 폴더 경로를 확인해 주세요.")
+                with library_lock(root):
+                    if self.path == "/api/library":
+                        files = [p for p in audio_files(root) if p.resolve().is_relative_to(root)]
+                        if len(files) > 500:
+                            raise ValueError("한 번에 불러올 수 있는 곡은 500개예요. 더 작은 폴더를 선택해 주세요.")
+                        reviews = [track_review(root, path) for path in files]
+                        for review in reviews:
+                            batch.remember_track(review)
+                        result = {"count": len(reviews)}
+                    else:
+                        path = resolve_track(root, data.get("path"), data.get("video_id", ""))
+                        if self.path == "/api/tag-read":
+                            result = track_review(root, path)
+                        else:
+                            result = save_review(root, path, data.get("revision"), data.get("tags"))
+                        batch.remember_track(result)
+                self.respond(200, result)
             elif self.path == "/api/retry":
                 job_id = data.get("id")
                 if not isinstance(job_id, str):
@@ -226,7 +263,9 @@ class Handler(BaseHTTPRequestHandler):
                 self.respond(200, {"ok": True})
             else:
                 self.respond(404, {"error": "Not found"})
-        except (ValueError, OSError, subprocess.SubprocessError) as error:
+        except SystemExit:
+            self.respond(409, {"error": "같은 폴더에서 다운로드나 태그 작업이 진행 중이에요. 끝난 뒤 다시 시도해 주세요. 입력한 값은 그대로 유지돼요."})
+        except (ValueError, RuntimeError, OSError, subprocess.SubprocessError) as error:
             self.respond(400, {"error": str(error)})
 
 
