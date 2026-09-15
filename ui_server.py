@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from music_pipeline import DEFAULT_ROOT, audio_files, library_lock, resolve_track, track_review, save_review
-from youtube_import import import_video, youtube_url
+from youtube_import import COOKIE_BROWSERS, import_video, youtube_url
 
 WEB = Path(__file__).parent / "web"
 ACTIVE = {"queued", "downloading", "tagging"}
@@ -50,8 +50,10 @@ class Batch:
             return {"root": str(self.root), "picker": sys.platform == "darwin",
                     "jobs": [dict(job) for job in self.jobs.values()]}
 
-    def add(self, links, folder):
+    def add(self, links, folder, browser_cookies=None):
         root = library_path(folder)
+        if browser_cookies is not None and (not isinstance(browser_cookies, str) or browser_cookies not in COOKIE_BROWSERS):
+            raise ValueError("YouTube 로그인에 사용할 브라우저를 다시 선택해 주세요.")
         if not isinstance(links, str) or len(links) > 32000:
             raise ValueError("링크를 텍스트로 입력해 주세요. 한 번에 최대 50개까지 가능해요.")
         lines = [line.strip() for line in links.splitlines() if line.strip()]
@@ -74,7 +76,7 @@ class Batch:
                 job_id = secrets.token_hex(8)
                 self.jobs[job_id] = {"id": job_id, "url": url, "root": str(root), "status": "queued",
                                      "title": f"YouTube · {video_id}", "artist": "", "progress": None,
-                                     "path": "", "error": ""}
+                                     "path": "", "error": "", "browser_cookies": browser_cookies}
                 self.pending.put(job_id)
                 result["accepted"] += 1
         return result
@@ -102,7 +104,7 @@ class Batch:
                             outcome.update(data)
                         else:
                             self.update(job_id, data)
-                    path = import_video(url, root, {}, on_progress=progress)
+                    path = import_video(url, root, {}, on_progress=progress, browser_cookies=job.get("browser_cookies"))
                     with self.lock:
                         self.jobs[job_id].update(outcome or {"status": "review" if path.parent.name == "_inbox" else "saved", "path": str(path)})
                 except (Exception, SystemExit) as error:
@@ -111,7 +113,9 @@ class Batch:
             finally:
                 self.pending.task_done()
 
-    def retry(self, job_id):
+    def retry(self, job_id, browser_cookies=None):
+        if browser_cookies is not None and (not isinstance(browser_cookies, str) or browser_cookies not in COOKIE_BROWSERS):
+            raise ValueError("YouTube 로그인에 사용할 브라우저를 다시 선택해 주세요.")
         with self.lock:
             job = self.jobs.get(job_id)
             if not job or job["status"] not in {"error", "cancelled"}:
@@ -119,7 +123,7 @@ class Batch:
             if any(other["id"] != job_id and other["url"] == job["url"] and other["root"] == job["root"]
                    and other["status"] in ACTIVE for other in self.jobs.values()):
                 raise ValueError("같은 링크가 이미 대기 중이에요.")
-            job.update(status="queued", progress=None, error="")
+            job.update(status="queued", progress=None, error="", browser_cookies=browser_cookies)
             self.pending.put(job_id)
 
     def cancel_waiting(self):
@@ -207,7 +211,8 @@ class Handler(BaseHTTPRequestHandler):
                 raise ValueError("요청 형식이 올바르지 않아요.")
             batch = self.server.batch
             if self.path == "/api/add":
-                self.respond(200, batch.add(data.get("links"), data.get("root")))
+                browser_cookies = data.get("browser_cookies")
+                self.respond(200, batch.add(data.get("links"), data.get("root"), None if browser_cookies == "" else browser_cookies))
             elif self.path in {"/api/library", "/api/tag-read", "/api/tag-save"}:
                 root = library_path(data.get("root"))
                 if not root.is_dir():
@@ -233,7 +238,8 @@ class Handler(BaseHTTPRequestHandler):
                 job_id = data.get("id")
                 if not isinstance(job_id, str):
                     raise ValueError("항목을 선택해 주세요.")
-                batch.retry(job_id)
+                browser_cookies = data.get("browser_cookies")
+                batch.retry(job_id, None if browser_cookies == "" else browser_cookies)
                 self.respond(200, {"ok": True})
             elif self.path == "/api/cancel":
                 batch.cancel_waiting()

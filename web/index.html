@@ -34,6 +34,16 @@
             <div class="folder-label"><label for="folder">저장 폴더</label><button type="button" class="text-button" id="choose-folder">폴더 선택</button></div>
             <input type="text" id="folder" autocomplete="off" spellcheck="false" aria-describedby="folder-help" placeholder="~/Music/minsmix">
             <p class="field-help" id="folder-help">완료한 곡은 <code>tracks</code>, 확인이 필요한 곡은 <code>_inbox</code>로.</p>
+            <label for="browser-cookies">YouTube 로그인 <span class="optional-label">필요할 때만</span></label>
+            <select id="browser-cookies" aria-describedby="cookies-help">
+              <option value="">사용 안 함 (권장)</option>
+              <option value="chrome">Chrome</option>
+              <option value="safari">Safari</option>
+              <option value="firefox">Firefox</option>
+              <option value="edge">Edge</option>
+              <option value="brave">Brave</option>
+            </select>
+            <p class="field-help" id="cookies-help">연령 제한 영상에만 사용하세요. 선택한 브라우저에서 YouTube 로그인과 연령 확인이 먼저 되어 있어야 해요. 쿠키는 저장하거나 업로드하지 않아요.</p>
             <button class="primary-button" id="submit" type="submit" disabled><span id="submit-label">다운로드 시작</span><span aria-hidden="true">↗</span></button>
             <p id="form-message" class="form-message" role="status" hidden></p>
           </form>

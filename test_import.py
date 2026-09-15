@@ -43,6 +43,14 @@ def check():
     assert importer.metadata_from_video(info, url, {"artist": "DJ", "genre": "DnB"})["artist"] == "DJ"
     assert importer.reject_live({"is_live": True})
     assert not importer.reject_live({"live_status": "was_live"})
+    assert importer.browser_cookie_source("chrome") == ("chrome", None, None, None)
+    assert importer.browser_cookie_source(None) is None
+    try:
+        importer.browser_cookie_source("unknown")
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Accepted an unsupported cookie browser")
     assert len(importer.filename_for({"artist": "가" * 200, "title": "../../Track"}).encode()) < 255
 
     with tempfile.TemporaryDirectory(prefix="youtube-dj-test-") as work:

@@ -29,6 +29,8 @@ On macOS, double-click **Open minsmix.command**. A Korean-language browser UI op
 2. Choose a download folder with the native folder picker, or type its path.
 3. Start the batch. Track each download, open result folders, and retry failed items.
 
+For an age-restricted video, first sign in to YouTube and complete age verification in your browser. Then choose that browser under **YouTube 로그인** before adding the link or pressing **다시 시도**. Leave it at **사용 안 함** for ordinary videos. Browser cookies are read locally for that download and are not exported or saved by this app. Use an account session only when necessary; authenticated downloading can put the account at risk if YouTube flags the activity.
+
 Links run sequentially; one failure does not stop the others. Duplicate links in the queue are skipped. You can add more links while a batch runs, cancel waiting items without interrupting the current download, or clear finished history without deleting files. Unrecognized artist information goes to `_inbox` for review in the UI.
 
 The UI requires no extra packages, account, or hosted server. It binds only to `127.0.0.1`, checks request Host/Origin and a per-session token, and never serves music files over HTTP. Keep the launcher/terminal window open while downloading. Closing the browser does not stop the queue. Ctrl+C cancels waiting items and waits for the current import to finish before exiting. Queue history is in memory and resets when the server restarts; downloaded files remain on disk. Your last-used folder is stored only in your browser.
@@ -52,6 +54,9 @@ Or use the command line:
 
 # Choose any library/download folder
 .venv/bin/python youtube_import.py 'YOUTUBE_URL' --output '/path/to/DJ Music'
+
+# Account-gated video (sign in to YouTube in Chrome first)
+.venv/bin/python youtube_import.py 'YOUTUBE_URL' --cookies-from-browser chrome
 
 # Correct an ambiguous title at download time
 .venv/bin/python youtube_import.py 'YOUTUBE_URL' \
@@ -79,7 +84,7 @@ Filenames are `Artist - Title.mp3`, without a YouTube ID suffix. Different video
 
 The MP3 carries ID3v2.3 tags; metadata is not just a sidecar. Upload date stays in provenance JSON, not the release-year tag. Artwork, BPM, key detection, fingerprint lookup, and direct rekordbox-database changes are intentionally out of scope. Use rekordbox analysis for BPM/key and check beatgrids by ear.
 
-Quality: yt-dlp selects the best available audio stream. Non-MP3 sources are encoded once to 320 kbps MP3 for compatibility; an MP3 source is copied without re-encoding. **320 kbps does not restore detail lost by YouTube.** The original stream remains in `_sources` if you want it later. Prefer a creator's original WAV/AIFF/FLAC download for performance use when available. No cookies, accounts or browser history are accessed.
+Quality: yt-dlp selects the best available audio stream. Non-MP3 sources are encoded once to 320 kbps MP3 for compatibility; an MP3 source is copied without re-encoding. **320 kbps does not restore detail lost by YouTube.** The original stream remains in `_sources` if you want it later. Prefer a creator's original WAV/AIFF/FLAC download for performance use when available. Browser cookies are not accessed unless you explicitly select a browser for an account-gated download.
 
 ## Review or correct metadata
 

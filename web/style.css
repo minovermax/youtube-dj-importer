@@ -18,12 +18,12 @@
 }
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--bg); color: var(--text); font-size: 14px; line-height: 1.6; }
-button, input, textarea { font: inherit; }
+button, input, select, textarea { font: inherit; }
 button, a { -webkit-tap-highlight-color: transparent; }
 button { cursor: pointer; }
 button:disabled { cursor: not-allowed; opacity: .5; }
 button:active:not(:disabled) { transform: translateY(1px); }
-button, a, input, textarea { transition: background-color .16s, border-color .16s, color .16s; }
+button, a, input, select, textarea { transition: background-color .16s, border-color .16s, color .16s; }
 :focus-visible { outline: 3px solid var(--primary); outline-offset: 3px; }
 button[hidden], [hidden] { display: none !important; }
 .app-shell { max-width: 1160px; padding: 0 40px; margin: 0 auto; }
@@ -54,11 +54,12 @@ h2 { font-size: 16px; letter-spacing: -.5px; margin: 0; font-weight: 650; displa
 label { font-size: 12px; font-weight: 600; }
 #link-count { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; }
 #link-count[data-over="true"] { color: var(--danger); }
-textarea, input { display: block; width: 100%; border: 1px solid #d6dce5; border-radius: 8px; background: #fcfdff; padding: 12px; color: var(--text); font-size: 12px; }
+textarea, input, select { display: block; width: 100%; border: 1px solid #d6dce5; border-radius: 8px; background: #fcfdff; padding: 12px; color: var(--text); font-size: 12px; }
 textarea { min-height: 140px; height: 140px; resize: vertical; line-height: 1.8; font-family: "JetBrains Mono", ui-monospace, monospace; }
 textarea::placeholder, input::placeholder { color: #758195; }
-textarea:focus, input:focus { border-color: var(--primary); background: var(--surface); }
+textarea:focus, input:focus, select:focus { border-color: var(--primary); background: var(--surface); }
 input { height: 42px; font-family: "JetBrains Mono", ui-monospace, monospace; }
+select { height: 42px; margin-top: 8px; }
 .field-help { margin: 8px 0 16px; font-size: 11px; color: var(--muted); line-height: 1.65; }
 code { color: #47566d; font-size: 11px; }
 .text-button { appearance: none; border: 0; padding: 4px 0; color: var(--primary); background: transparent; font-size: 11px; white-space: nowrap; }

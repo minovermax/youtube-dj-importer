@@ -135,7 +135,7 @@ $("#import-form").addEventListener("submit", async (event) => {
   updateSubmit();
   const input = $("#links").value;
   try {
-    const result = await api("add", { links: input, root: $("#folder").value });
+    const result = await api("add", { links: input, root: $("#folder").value, browser_cookies: $("#browser-cookies").value || null });
     if ($("#links").value === input) $("#links").value = result.invalid.join("\n");
     rememberFolder();
     const notices = [`${result.accepted}곡을 다운로드 목록에 추가했어요.`];
@@ -177,7 +177,7 @@ $("#jobs").addEventListener("click", async (event) => {
     await openFolder(job.path.slice(0, job.path.lastIndexOf("/")));
   } else if (button.classList.contains("job-retry")) {
     button.disabled = true;
-    try { await api("retry", { id: job.id }); await refresh(); }
+    try { await api("retry", { id: job.id, browser_cookies: $("#browser-cookies").value || null }); await refresh(); }
     catch (error) { message(error.message, true); }
     finally { button.disabled = false; }
   }

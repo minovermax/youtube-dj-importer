@@ -27,9 +27,12 @@ def check():
         tone = root / ".test-tone.mp3"
         subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.1", str(tone)], check=True)
 
-        def fake_import(url, folder, overrides, *, on_progress):
+        cookie_calls = []
+
+        def fake_import(url, folder, overrides, *, on_progress, browser_cookies=None):
             video_id = url.split("v=")[1]
             calls.append(video_id)
+            cookie_calls.append(browser_cookies)
             attempts[video_id] = attempts.get(video_id, 0) + 1
             if video_id == "aaaaaaaaaaa":
                 entered.set()
@@ -75,6 +78,8 @@ def check():
                 assert request("/api/state", headers={"X-Minsmix-Token": "é"})[0] == 403
                 assert request("/../music_pipeline.py")[0] == 404
                 assert request("/api/add", {"links": "https://youtu.be/aaaaaaaaaaa", "root": "relative/path"})[0] == 400
+                assert request("/api/add", {"links": "https://youtu.be/aaaaaaaaaaa", "root": str(root), "browser_cookies": "unknown"})[0] == 400
+                assert request("/api/add", {"links": "https://youtu.be/aaaaaaaaaaa", "root": str(root), "browser_cookies": []})[0] == 400
                 assert request("/api/add", {"links": "\n".join(["https://youtu.be/aaaaaaaaaaa"] * 51), "root": str(root)})[0] == 400
                 with patch.object(ui_server.sys, "platform", "darwin"):
                     with patch.object(ui_server.subprocess, "run", return_value=subprocess.CompletedProcess([], 0, stdout=str(root) + "\n", stderr="")):
@@ -85,7 +90,7 @@ def check():
                         code, body, _ = request("/api/choose-folder", {})
                         assert code == 400 and "시간이 지났어요" in json.loads(body)["error"]
 
-                code, body, _ = request("/api/add", {"links": "https://youtu.be/aaaaaaaaaaa\nhttps://youtube.com/watch?v=aaaaaaaaaaa&list=ignore\nhttps://evil.example/\nhttps://youtu.be/bbbbbbbbbbb\nhttps://youtu.be/ccccccccccc", "root": str(root)})
+                code, body, _ = request("/api/add", {"links": "https://youtu.be/aaaaaaaaaaa\nhttps://youtube.com/watch?v=aaaaaaaaaaa&list=ignore\nhttps://evil.example/\nhttps://youtu.be/bbbbbbbbbbb\nhttps://youtu.be/ccccccccccc", "root": str(root), "browser_cookies": "chrome"})
                 result = json.loads(body)
                 assert code == 200 and result == {"accepted": 3, "duplicates": 1, "invalid": ["https://evil.example/"]}
                 assert entered.wait(5)
@@ -107,10 +112,12 @@ def check():
                 state = server.batch.snapshot()
                 assert [job["status"] for job in state["jobs"]] == ["saved", "error", "review"]
                 assert calls == ["aaaaaaaaaaa", "bbbbbbbbbbb", "ccccccccccc"]
+                assert cookie_calls == ["chrome", "chrome", "chrome"]
                 failed_id = state["jobs"][1]["id"]
-                assert request("/api/retry", {"id": failed_id})[0] == 200
+                assert request("/api/retry", {"id": failed_id, "browser_cookies": "firefox"})[0] == 200
                 wait_idle()
                 assert server.batch.snapshot()["jobs"][1]["status"] == "saved"
+                assert cookie_calls[-1] == "firefox"
                 assert request("/api/retry", {"id": []})[0] == 400
                 review_path = root / "_inbox" / "test [ccccccccccc].mp3"
                 first_path = root / "tracks" / "test [aaaaaaaaaaa].mp3"

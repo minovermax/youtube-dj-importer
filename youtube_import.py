@@ -107,7 +107,16 @@ def reject_live(info: dict, *, incomplete: bool = False):
     return None
 
 
-def download_source(url: str, stage: Path, on_progress=None) -> tuple[dict, Path]:
+COOKIE_BROWSERS = {"brave", "chrome", "edge", "firefox", "safari"}
+
+
+def browser_cookie_source(value: str | None):
+    if value is not None and (not isinstance(value, str) or value not in COOKIE_BROWSERS):
+        raise ValueError("Choose a supported browser for YouTube login: Chrome, Firefox, Safari, Edge, or Brave.")
+    return (value, None, None, None) if value else None
+
+
+def download_source(url: str, stage: Path, on_progress=None, browser_cookies: str | None = None) -> tuple[dict, Path]:
     runtime = next((name for name in ("deno", "node") if shutil.which(name)), None)
     if runtime is None:
         raise RuntimeError("YouTube needs Deno or Node.js. Install Node 22+ (or Deno) and try again.")
@@ -119,6 +128,8 @@ def download_source(url: str, stage: Path, on_progress=None) -> tuple[dict, Path
         "js_runtimes": {runtime: {"path": shutil.which(runtime)}},
         "socket_timeout": 30,
     }
+    if cookies := browser_cookie_source(browser_cookies):
+        options["cookiesfrombrowser"] = cookies
     if on_progress:
         def progress(data):
             total = data.get("total_bytes") or data.get("total_bytes_estimate")
@@ -126,11 +137,18 @@ def download_source(url: str, stage: Path, on_progress=None) -> tuple[dict, Path
             on_progress({"status": "downloading", "progress": percent,
                          "title": clean(data.get("info_dict", {}).get("title"))})
         options.update(progress_hooks=[progress], quiet=True, noprogress=True)
-    with YoutubeDL(options) as downloader:
-        info = downloader.extract_info(url, download=True)
-        if not info or info.get("_type") in {"playlist", "multi_video"} or reject_live(info):
-            raise RuntimeError("No finished single video could be downloaded.")
-        source = Path(downloader.prepare_filename(info))
+    try:
+        with YoutubeDL(options) as downloader:
+            info = downloader.extract_info(url, download=True)
+            if not info or info.get("_type") in {"playlist", "multi_video"} or reject_live(info):
+                raise RuntimeError("No finished single video could be downloaded.")
+            source = Path(downloader.prepare_filename(info))
+    except DownloadError as error:
+        if "Sign in to confirm your age" in str(error):
+            if browser_cookies:
+                raise RuntimeError(f"{browser_cookies.title()}에서 YouTube 로그인과 연령 확인을 마친 뒤 다시 시도해 주세요.") from error
+            raise RuntimeError("연령 제한 영상이에요. UI의 ‘YouTube 로그인’에서 로그인된 브라우저를 선택해 다시 시도해 주세요.") from error
+        raise
     if not source.is_file() or source.stat().st_size == 0:
         raise RuntimeError("The audio download did not complete.")
     return info, source
@@ -161,7 +179,7 @@ def publish_mp3(source: Path, destination: Path) -> None:
             raise
 
 
-def import_video(value: str, root: Path, overrides: dict, *, on_progress=None) -> Path:
+def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, browser_cookies: str | None = None) -> Path:
     url, video_id = youtube_url(value)
     for binary in ("ffmpeg", "ffprobe"):
         if not shutil.which(binary):
@@ -188,7 +206,8 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None) -
             raise RuntimeError(f"A source archive already exists at {archive}. Inspect it before retrying; nothing was overwritten.")
         with tempfile.TemporaryDirectory(prefix=".youtube-", dir=root) as work:
             stage = Path(work)
-            info, source = download_source(url, stage, on_progress) if on_progress else download_source(url, stage)
+            info, source = (download_source(url, stage, on_progress, browser_cookies)
+                            if on_progress or browser_cookies else download_source(url, stage))
             tags = metadata_from_video(info, url, overrides)
             if on_progress:
                 on_progress({"status": "tagging", "progress": None, "title": tags["title"], "artist": tags["artist"]})
@@ -234,11 +253,14 @@ def main() -> None:
     for field in ("artist", "title", "album", "genre"):
         parser.add_argument(f"--{field}", help=f"Override the {field} tag.")
     parser.add_argument("--open", action="store_true", help="Reveal the downloaded file in Finder (macOS).")
+    parser.add_argument("--cookies-from-browser", choices=sorted(COOKIE_BROWSERS), metavar="BROWSER",
+                        help="Use a signed-in browser only for account-gated videos (chrome, firefox, safari, edge, brave).")
     args = parser.parse_args()
     try:
         url = args.url or input("YouTube link: ").strip()
         print(f"Download directory: {args.root.expanduser().resolve()}")
-        destination = import_video(url, args.root, {field: getattr(args, field) for field in ("artist", "title", "album", "genre")})
+        destination = import_video(url, args.root, {field: getattr(args, field) for field in ("artist", "title", "album", "genre")},
+                                   browser_cookies=args.cookies_from_browser)
         if args.open and sys.platform == "darwin":
             subprocess.run(["open", "-R", str(destination)], check=True)
     except (ValueError, RuntimeError, OSError, DownloadError, subprocess.CalledProcessError) as error:
