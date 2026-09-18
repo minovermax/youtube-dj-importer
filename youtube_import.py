@@ -12,8 +12,10 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
+from urllib.request import Request, urlopen
 
 from mutagen.id3 import APIC, COMM, TALB, TCON, TIT2, TPE1, TXXX, WOAS, ID3, ID3NoHeaderError
 from yt_dlp import YoutubeDL
@@ -170,6 +172,62 @@ def download_source(url: str, stage: Path, on_progress=None, browser_cookies: st
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+MAX_COVER_BYTES = 15 * 1024 * 1024
+
+
+class OpenGraphImageParser(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__()
+        self.image_url = ""
+
+    def handle_starttag(self, tag: str, attributes: list[tuple[str, str | None]]) -> None:
+        if tag != "meta" or self.image_url:
+            return
+        attrs = dict(attributes)
+        if attrs.get("property") == "og:image":
+            self.image_url = attrs.get("content") or ""
+
+
+def music_cover_url(page: str) -> str:
+    parser = OpenGraphImageParser()
+    parser.feed(page)
+    parsed = urlparse(parser.image_url)
+    if (parsed.scheme != "https" or parsed.hostname != "yt3.googleusercontent.com"
+            or parsed.username or parsed.password):
+        raise ValueError("YouTube Music did not provide a trusted cover URL.")
+    # The bare Open Graph URL defaults to 512px. =s0 requests the largest stored original.
+    path = parsed.path.rsplit("=", 1)[0]
+    return parsed._replace(path=f"{path}=s0", query="", fragment="").geturl()
+
+
+def read_limited(response, limit: int) -> bytes:
+    data = response.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("YouTube Music artwork exceeded the size limit.")
+    return data
+
+
+def download_music_cover(video_id: str, stage: Path) -> Path | None:
+    headers = {"User-Agent": "Mozilla/5.0 (compatible; minsmix/1.0)"}
+    try:
+        page_request = Request(f"https://music.youtube.com/watch?v={video_id}", headers=headers)
+        with urlopen(page_request, timeout=30) as response:
+            page = read_limited(response, 2 * 1024 * 1024).decode("utf-8", errors="replace")
+        cover_request = Request(music_cover_url(page), headers={**headers, "Accept": "image/*"})
+        with urlopen(cover_request, timeout=30) as response:
+            mime = response.headers.get_content_type()
+            suffix = {"image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp"}.get(mime)
+            if not suffix:
+                raise ValueError(f"Unsupported YouTube Music artwork type: {mime}")
+            data = read_limited(response, MAX_COVER_BYTES)
+        if not data:
+            raise ValueError("YouTube Music artwork was empty.")
+        destination = stage / f"music-cover{suffix}"
+        destination.write_bytes(data)
+        return destination
+    except (OSError, ValueError):
+        # Ordinary YouTube uploads may not expose Music artwork; retain the video-thumbnail fallback.
+        return None
 
 
 def find_thumbnail(stage: Path, source: Path) -> Path | None:
@@ -181,6 +239,9 @@ def find_thumbnail(stage: Path, source: Path) -> Path | None:
 
 
 def make_cover(source: Path, destination: Path) -> None:
+    if source.suffix.lower() in {".jpg", ".jpeg"}:
+        shutil.copyfile(source, destination)
+        return
     subprocess.run(
         ["ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror", "-nostdin", "-n", "-i", str(source),
          "-map", "0:v:0", "-frames:v", "1", "-q:v", "2", str(destination)],
@@ -245,14 +306,16 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
             info, source = (download_source(url, stage, on_progress, browser_cookies)
                             if on_progress or browser_cookies else download_source(url, stage))
             thumbnail = find_thumbnail(stage, source)
+            music_cover = download_music_cover(video_id, stage)
+            cover_source = music_cover or thumbnail
             tags = metadata_from_video(info, url, overrides)
             if on_progress:
                 on_progress({"status": "tagging", "progress": None, "title": tags["title"], "artist": tags["artist"]})
             mp3 = stage / "track.mp3"
             make_mp3(source, mp3)
-            cover = stage / "cover.jpg" if thumbnail else None
-            if thumbnail and cover:
-                make_cover(thumbnail, cover)
+            cover = stage / "cover.jpg" if cover_source else None
+            if cover_source and cover:
+                make_cover(cover_source, cover)
             embed_tags(mp3, tags, url, video_id, cover)
             folder = "tracks" if tags["artist"] and tags["title"] else "_inbox"
             destination = root / folder / filename_for(tags)
@@ -274,6 +337,8 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
             )}
             provenance.update(source_url=url, applied_tags=tags, source_filename=source.name,
                               source_thumbnail_filename=thumbnail.name if thumbnail else None,
+                              music_cover_filename=music_cover.name if music_cover else None,
+                              artwork_source="youtube_music" if music_cover else "youtube_video_thumbnail" if thumbnail else None,
                               artwork_filename=str(artwork_destination.relative_to(root)) if artwork_destination else None)
             with (stage / "metadata.json").open("w", encoding="utf-8") as handle:
                 json.dump(provenance, handle, ensure_ascii=False, indent=2)
@@ -282,6 +347,8 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
             shutil.move(str(source), archive / source.name)
             if thumbnail:
                 shutil.move(str(thumbnail), archive / thumbnail.name)
+            if music_cover:
+                shutil.move(str(music_cover), archive / music_cover.name)
             shutil.move(str(stage / "metadata.json"), archive / "metadata.json")
             published = []
             try:

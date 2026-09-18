@@ -45,6 +45,16 @@ def check():
     assert not importer.reject_live({"live_status": "was_live"})
     assert importer.browser_cookie_source("chrome") == ("chrome", None, None, None)
     assert importer.browser_cookie_source(None) is None
+    cover_url = importer.music_cover_url(
+        '<meta property="og:image" content="https://yt3.googleusercontent.com/example=w544-h544">'
+    )
+    assert cover_url == "https://yt3.googleusercontent.com/example=s0"
+    try:
+        importer.music_cover_url('<meta property="og:image" content="https://example.com/not-trusted.jpg">')
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("Accepted an untrusted artwork host")
     try:
         importer.browser_cookie_source("unknown")
     except ValueError:
@@ -68,7 +78,16 @@ def check():
             )
             return info, source
 
-        with patch.object(importer, "download_source", side_effect=fake_download) as download:
+        def fake_music_cover(_video_id, stage):
+            cover = stage / "music-cover.png"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=green:s=96x96",
+                 "-frames:v", "1", str(cover)], check=True,
+            )
+            return cover
+
+        with (patch.object(importer, "download_source", side_effect=fake_download) as download,
+              patch.object(importer, "download_music_cover", side_effect=fake_music_cover)):
             path = importer.import_video(url, root, {})
             assert path.parent == root / "tracks"
             assert path.name == "가수 - Song (DJ Remix).mp3"
@@ -84,6 +103,7 @@ def check():
             assert covers[0].data == artwork.read_bytes()
             assert (root / "_sources" / "BaW_jenozKc" / "source.m4a").exists()
             assert (root / "_sources" / "BaW_jenozKc" / "source.png").exists()
+            assert (root / "_sources" / "BaW_jenozKc" / "music-cover.png").exists()
             assert importer.import_video(url, root, {}) == path
             assert download.call_count == 1
             renamed = path.with_name("Manually renamed.mp3")
@@ -92,7 +112,8 @@ def check():
             renamed.rename(path)
             assert download.call_count == 1
 
-        with patch.object(importer, "download_source", side_effect=fake_download):
+        with (patch.object(importer, "download_source", side_effect=fake_download),
+              patch.object(importer, "download_music_cover", side_effect=fake_music_cover)):
             same_title = importer.import_video("https://youtu.be/bbbbbbbbbbb", root, {})
             assert same_title.name == "가수 - Song (DJ Remix) (2).mp3"
             assert (root / "artwork" / "가수 - Song (DJ Remix) (2).jpg").exists()
@@ -131,7 +152,8 @@ def check():
             shutil.copy2(path, source)
             return {"id": "aqz-KE-bpKQ", "title": "Unknown song", "channel": "Uploader"}, source
 
-        with patch.object(importer, "download_source", side_effect=unknown_download):
+        with (patch.object(importer, "download_source", side_effect=unknown_download),
+              patch.object(importer, "download_music_cover", return_value=None)):
             unknown = importer.import_video("https://youtu.be/aqz-KE-bpKQ", root, {})
         assert unknown.parent == root / "_inbox"
         assert not pipeline.load_manifest(root / "metadata.csv")[unknown.name]["artist"]

@@ -80,7 +80,7 @@ your-download-folder/
 - **Album:** only taken from a structured YouTube album field when its track title matches the selected title. Unknown albums stay blank. No invented album or release year.
 - **Genre:** blank unless provided explicitly; no audio-based genre guessing.
 - **Comment:** source URL, original video title, channel, metadata provenance, and any missing-field warning. Source URL and video ID also get their own ID3 fields.
-- **Artwork:** the best thumbnail supplied by YouTube is converted to JPG, embedded as the MP3 front cover, and also saved separately in `artwork/`. The original thumbnail stays in `_sources`; because a video thumbnail is not always official album art, verify it during review.
+- **Artwork:** the full-size square cover exposed by YouTube Music is preferred, embedded as the MP3 front cover, and also saved separately in `artwork/`. If a Music cover is unavailable, the best video thumbnail is used instead. Downloaded cover sources stay in `_sources`; verify unofficial uploads during review.
 
 Filenames are `Artist - Title.mp3`, without a YouTube ID suffix. Different videos with the same name get a numeric suffix such as `(2)`. Duplicate downloads are recognized by the embedded YouTube ID, even after you rename a file. Legacy ID-suffixed filenames are also recognized.
 
