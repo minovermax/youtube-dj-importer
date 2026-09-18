@@ -15,7 +15,7 @@ import tempfile
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
-from mutagen.id3 import COMM, TALB, TCON, TIT2, TPE1, TXXX, WOAS, ID3, ID3NoHeaderError
+from mutagen.id3 import APIC, COMM, TALB, TCON, TIT2, TPE1, TXXX, WOAS, ID3, ID3NoHeaderError
 from yt_dlp import YoutubeDL
 from yt_dlp.utils import DownloadError
 
@@ -85,7 +85,20 @@ def filename_for(tags: dict) -> str:
     return f"{name}.mp3"
 
 
-def embed_tags(path: Path, tags: dict, url: str, video_id: str) -> None:
+def add_front_cover(id3: ID3, cover: Path | None) -> None:
+    if not cover:
+        return
+    other_pictures = [frame for frame in id3.getall("APIC") if frame.type != 3]
+    id3.delall("APIC")
+    for frame in other_pictures:
+        id3.add(frame)
+    data = cover.read_bytes()
+    if not data:
+        raise RuntimeError(f"Downloaded artwork is empty: {cover}")
+    id3.add(APIC(encoding=1, mime="image/jpeg", type=3, desc="Cover", data=data))
+
+
+def embed_tags(path: Path, tags: dict, url: str, video_id: str, cover: Path | None = None) -> None:
     try:
         id3 = ID3(path)
     except ID3NoHeaderError:
@@ -98,6 +111,7 @@ def embed_tags(path: Path, tags: dict, url: str, video_id: str) -> None:
     id3.add(COMM(encoding=1, lang="eng", desc="", text=tags["comment"]))
     id3.add(WOAS(url=url))
     id3.add(TXXX(encoding=1, desc="YouTube ID", text=video_id))
+    add_front_cover(id3, cover)
     id3.save(path, v2_version=3)
 
 
@@ -127,6 +141,7 @@ def download_source(url: str, stage: Path, on_progress=None, browser_cookies: st
         "match_filter": reject_live,
         "js_runtimes": {runtime: {"path": shutil.which(runtime)}},
         "socket_timeout": 30,
+        "writethumbnail": True,
     }
     if cookies := browser_cookie_source(browser_cookies):
         options["cookiesfrombrowser"] = cookies
@@ -154,6 +169,27 @@ def download_source(url: str, stage: Path, on_progress=None, browser_cookies: st
     return info, source
 
 
+IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def find_thumbnail(stage: Path, source: Path) -> Path | None:
+    candidates = [
+        path for path in stage.iterdir()
+        if path.is_file() and path != source and path.suffix.lower() in IMAGE_SUFFIXES
+    ]
+    return max(candidates, key=lambda path: path.stat().st_size) if candidates else None
+
+
+def make_cover(source: Path, destination: Path) -> None:
+    subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-xerror", "-nostdin", "-n", "-i", str(source),
+         "-map", "0:v:0", "-frames:v", "1", "-q:v", "2", str(destination)],
+        check=True,
+    )
+    if not destination.is_file() or destination.stat().st_size == 0:
+        raise RuntimeError("The artwork conversion did not complete.")
+
+
 def make_mp3(source: Path, destination: Path) -> None:
     codec = ["-c:a", "copy"] if source.suffix.lower() == ".mp3" else ["-c:a", "libmp3lame", "-b:a", "320k"]
     subprocess.run(
@@ -163,7 +199,7 @@ def make_mp3(source: Path, destination: Path) -> None:
     )
 
 
-def publish_mp3(source: Path, destination: Path) -> None:
+def publish_file(source: Path, destination: Path) -> None:
     try:
         os.link(source, destination)  # Atomic and refuses to replace an existing file.
     except OSError as error:
@@ -208,38 +244,63 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
             stage = Path(work)
             info, source = (download_source(url, stage, on_progress, browser_cookies)
                             if on_progress or browser_cookies else download_source(url, stage))
+            thumbnail = find_thumbnail(stage, source)
             tags = metadata_from_video(info, url, overrides)
             if on_progress:
                 on_progress({"status": "tagging", "progress": None, "title": tags["title"], "artist": tags["artist"]})
             mp3 = stage / "track.mp3"
             make_mp3(source, mp3)
-            embed_tags(mp3, tags, url, video_id)
+            cover = stage / "cover.jpg" if thumbnail else None
+            if thumbnail and cover:
+                make_cover(thumbnail, cover)
+            embed_tags(mp3, tags, url, video_id, cover)
             folder = "tracks" if tags["artist"] and tags["title"] else "_inbox"
             destination = root / folder / filename_for(tags)
             destination.parent.mkdir(exist_ok=True)
+            artwork_dir = root / "artwork"
             # CSV rows use basenames, so distinguish matching titles across both folders.
             names = {p.name.casefold() for p in audio_files(root)}
             stem, counter = destination.stem, 2
-            while destination.name.casefold() in names or destination.exists():
+            while (destination.name.casefold() in names or destination.exists()
+                   or (cover is not None and (artwork_dir / f"{destination.stem}.jpg").exists())):
                 destination = destination.with_name(f"{stem} ({counter}).mp3")
                 counter += 1
+            artwork_destination = artwork_dir / f"{destination.stem}.jpg" if cover else None
+            if artwork_destination:
+                artwork_dir.mkdir(exist_ok=True)
             provenance = {key: info.get(key) for key in (
                 "id", "title", "artist", "track", "album", "channel", "uploader", "upload_date",
                 "format_id", "ext", "acodec", "abr", "asr",
             )}
-            provenance.update(source_url=url, applied_tags=tags, source_filename=source.name)
+            provenance.update(source_url=url, applied_tags=tags, source_filename=source.name,
+                              source_thumbnail_filename=thumbnail.name if thumbnail else None,
+                              artwork_filename=str(artwork_destination.relative_to(root)) if artwork_destination else None)
             with (stage / "metadata.json").open("w", encoding="utf-8") as handle:
                 json.dump(provenance, handle, ensure_ascii=False, indent=2)
             archive.parent.mkdir(exist_ok=True)
             archive.mkdir()  # Never replace an existing download, even after an interrupted import.
             shutil.move(str(source), archive / source.name)
+            if thumbnail:
+                shutil.move(str(thumbnail), archive / thumbnail.name)
             shutil.move(str(stage / "metadata.json"), archive / "metadata.json")
-            publish_mp3(mp3, destination)
-            write_manifest(root)
+            published = []
+            try:
+                publish_file(mp3, destination)
+                published.append(destination)
+                if cover and artwork_destination:
+                    publish_file(cover, artwork_destination)
+                    published.append(artwork_destination)
+                write_manifest(root)
+            except BaseException:
+                for path in reversed(published):
+                    path.unlink(missing_ok=True)
+                raise
         if on_progress:
             on_progress({"status": "review" if folder == "_inbox" else "saved", "progress": 100,
                          "path": str(destination), "title": tags["title"], "artist": tags["artist"]})
         print(f"\nSaved: {destination}\nArtist: {tags['artist'] or '(needs review)'}\nTitle: {tags['title'] or '(needs review)'}")
+        if artwork_destination:
+            print(f"Artwork: {artwork_destination}")
         print(f"Original source preserved: {archive}")
         if folder == "_inbox":
             print("Needs review: fill Artist/Title in the UI tag editor, or use metadata.csv and music_pipeline.py apply.")

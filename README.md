@@ -71,7 +71,8 @@ Or use the command line:
 your-download-folder/
   tracks/             tagged MP3s with Artist and Title
   _inbox/             MP3s missing Artist or Title, for review
-  _sources/VIDEO_ID/  original source audio and provenance JSON
+  artwork/            separate JPG cover files matching the MP3 names
+  _sources/VIDEO_ID/  original source audio, thumbnail, and provenance JSON
   metadata.csv        editable review sheet
 ```
 
@@ -79,10 +80,11 @@ your-download-folder/
 - **Album:** only taken from a structured YouTube album field when its track title matches the selected title. Unknown albums stay blank. No invented album or release year.
 - **Genre:** blank unless provided explicitly; no audio-based genre guessing.
 - **Comment:** source URL, original video title, channel, metadata provenance, and any missing-field warning. Source URL and video ID also get their own ID3 fields.
+- **Artwork:** the best thumbnail supplied by YouTube is converted to JPG, embedded as the MP3 front cover, and also saved separately in `artwork/`. The original thumbnail stays in `_sources`; because a video thumbnail is not always official album art, verify it during review.
 
 Filenames are `Artist - Title.mp3`, without a YouTube ID suffix. Different videos with the same name get a numeric suffix such as `(2)`. Duplicate downloads are recognized by the embedded YouTube ID, even after you rename a file. Legacy ID-suffixed filenames are also recognized.
 
-The MP3 carries ID3v2.3 tags; metadata is not just a sidecar. Upload date stays in provenance JSON, not the release-year tag. Artwork, BPM, key detection, fingerprint lookup, and direct rekordbox-database changes are intentionally out of scope. Use rekordbox analysis for BPM/key and check beatgrids by ear.
+The MP3 carries ID3v2.3 tags; metadata and artwork are not just sidecars. Upload date stays in provenance JSON, not the release-year tag. BPM, key detection, fingerprint lookup, and direct rekordbox-database changes are intentionally out of scope. Use rekordbox analysis for BPM/key and check beatgrids by ear.
 
 Quality: yt-dlp selects the best available audio stream. Non-MP3 sources are encoded once to 320 kbps MP3 for compatibility; an MP3 source is copied without re-encoding. **320 kbps does not restore detail lost by YouTube.** The original stream remains in `_sources` if you want it later. Prefer a creator's original WAV/AIFF/FLAC download for performance use when available. Browser cookies are not accessed unless you explicitly select a browser for an account-gated download.
 

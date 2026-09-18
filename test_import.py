@@ -62,6 +62,10 @@ def check():
                 ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.2",
                  "-c:a", "aac", str(source)], check=True,
             )
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=red:s=64x64",
+                 "-frames:v", "1", str(stage / "source.png")], check=True,
+            )
             return info, source
 
         with patch.object(importer, "download_source", side_effect=fake_download) as download:
@@ -73,7 +77,13 @@ def check():
             assert str(id3["TPE1"]) == "가수" and str(id3["TIT2"]) == "Song (DJ Remix)"
             assert str(id3["TXXX:YouTube ID"]) == "BaW_jenozKc"
             assert id3["WOAS"].url == url
+            artwork = root / "artwork" / "가수 - Song (DJ Remix).jpg"
+            assert artwork.exists()
+            covers = id3.getall("APIC")
+            assert len(covers) == 1 and covers[0].mime == "image/jpeg" and covers[0].type == 3
+            assert covers[0].data == artwork.read_bytes()
             assert (root / "_sources" / "BaW_jenozKc" / "source.m4a").exists()
+            assert (root / "_sources" / "BaW_jenozKc" / "source.png").exists()
             assert importer.import_video(url, root, {}) == path
             assert download.call_count == 1
             renamed = path.with_name("Manually renamed.mp3")
@@ -85,15 +95,16 @@ def check():
         with patch.object(importer, "download_source", side_effect=fake_download):
             same_title = importer.import_video("https://youtu.be/bbbbbbbbbbb", root, {})
             assert same_title.name == "가수 - Song (DJ Remix) (2).mp3"
+            assert (root / "artwork" / "가수 - Song (DJ Remix) (2).jpg").exists()
             assert str(ID3(path)["TXXX:YouTube ID"]) == "BaW_jenozKc"
 
         before = audio_hash(path)
         with patch.object(importer.os, "link", side_effect=OSError(errno.ENOTSUP, "No hardlinks")):
             copy = root / ".usb-copy.mp3"
-            importer.publish_mp3(path, copy)
+            importer.publish_file(path, copy)
             assert audio_hash(copy) == before
             try:
-                importer.publish_mp3(path, copy)
+                importer.publish_file(path, copy)
             except FileExistsError:
                 pass
             else:
@@ -136,7 +147,7 @@ def check():
         assert not list(root.glob(".youtube-*"))
         assert len(pipeline.audio_files(root)) == 3
         assert audio_hash(path) == before
-    print("PASS: URL validation, remix metadata, Unicode filenames, ID3, audio conversion/copy, duplicate protection, CSV review, inbox routing, failure cleanup.")
+    print("PASS: URL validation, remix metadata, artwork, Unicode filenames, ID3, audio conversion/copy, duplicate protection, CSV review, inbox routing, failure cleanup.")
 
 
 if __name__ == "__main__":
