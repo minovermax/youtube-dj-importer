@@ -19,7 +19,7 @@ from pathlib import Path
 from urllib.request import urlopen
 
 from music_pipeline import DEFAULT_ROOT, audio_files, library_lock, resolve_track, track_review, save_review
-from youtube_import import COOKIE_BROWSERS, import_video, youtube_url
+from youtube_import import COOKIE_BROWSERS, import_video, parse_media_url
 
 WEB = Path(__file__).parent / "web"
 ACTIVE = {"queued", "downloading", "tagging"}
@@ -65,17 +65,19 @@ class Batch:
                 raise ValueError("목록이 가득 찼어요. 완료 목록을 비운 뒤 다시 추가해 주세요.")
             for line in lines:
                 try:
-                    url, video_id = youtube_url(line)
+                    source = parse_media_url(line)
                 except ValueError:
                     result["invalid"].append(line)
                     continue
+                url = source.url
                 if any(job["url"] == url and job["root"] == str(root)
                        and job["status"] not in {"error", "cancelled"} for job in self.jobs.values()):
                     result["duplicates"] += 1
                     continue
                 job_id = secrets.token_hex(8)
                 self.jobs[job_id] = {"id": job_id, "url": url, "root": str(root), "status": "queued",
-                                     "title": f"YouTube · {video_id}", "artist": "", "progress": None,
+                                     "title": source.label, "artist": "", "progress": None,
+                                     "source_id": source.source_id, "source_platform": source.platform,
                                      "path": "", "error": "", "browser_cookies": browser_cookies}
                 self.pending.put(job_id)
                 result["accepted"] += 1
@@ -150,7 +152,8 @@ class Batch:
             for job in matching:
                 if job.get("status") not in ACTIVE:
                     job.update(status=review["status"], path=review["path"], title=review["tags"]["title"] or Path(review["path"]).stem,
-                               artist=review["tags"]["artist"], url=review["source_url"], progress=100, error="")
+                               artist=review["tags"]["artist"], url=review["source_url"], progress=100, error="",
+                               source_id=review["source_id"], source_platform=review["source_platform"])
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -227,7 +230,8 @@ class Handler(BaseHTTPRequestHandler):
                             batch.remember_track(review)
                         result = {"count": len(reviews)}
                     else:
-                        path = resolve_track(root, data.get("path"), data.get("video_id", ""))
+                        source_id = data.get("source_id", data.get("video_id", ""))
+                        path = resolve_track(root, data.get("path"), source_id, data.get("source_platform", ""))
                         if self.path == "/api/tag-read":
                             result = track_review(root, path)
                         else:

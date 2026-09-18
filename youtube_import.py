@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""One YouTube URL -> best available source audio -> tagged DJ-library MP3."""
+"""One YouTube or SoundCloud track URL -> tagged DJ-library MP3."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from dataclasses import dataclass
 from html.parser import HTMLParser
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
@@ -24,12 +25,21 @@ from yt_dlp.utils import DownloadError
 from music_pipeline import DEFAULT_ROOT, audio_files, library_lock, write_manifest
 
 
-def youtube_url(value: str) -> tuple[str, str]:
-    """Accept only a single YouTube video; discard playlist and tracking parameters."""
+@dataclass(frozen=True)
+class SourceRef:
+    platform: str
+    url: str
+    source_id: str
+    label: str
+
+
+def parse_media_url(value: str) -> SourceRef:
+    """Accept one YouTube video or SoundCloud track and discard tracking parameters."""
     parsed = urlparse(value.strip())
     host = (parsed.hostname or "").lower()
-    if parsed.scheme not in {"http", "https"} or parsed.username or parsed.password:
-        raise ValueError("Paste a full https:// YouTube video link.")
+    if parsed.scheme != "https" or parsed.username or parsed.password:
+        raise ValueError("YouTube 또는 SoundCloud의 전체 https:// 곡 링크를 붙여 넣어 주세요.")
+    youtube_hosts = {"youtu.be", "www.youtu.be", "youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}
     if host in {"youtu.be", "www.youtu.be"}:
         video_id = parsed.path.strip("/")
     elif host in {"youtube.com", "www.youtube.com", "m.youtube.com", "music.youtube.com"}:
@@ -39,39 +49,71 @@ def youtube_url(value: str) -> tuple[str, str]:
             match = re.fullmatch(r"/(?:shorts|live|embed)/([\w-]{11})/?", parsed.path)
             video_id = match[1] if match else ""
     else:
-        raise ValueError("Only youtube.com and youtu.be video links are supported.")
-    if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
-        raise ValueError("This is not a single-video link. Paste a watch, Shorts, live-video, or youtu.be URL.")
-    return f"https://www.youtube.com/watch?v={video_id}", video_id
+        video_id = ""
+    if host in youtube_hosts:
+        if not re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
+            raise ValueError("YouTube 재생목록이 아닌 단일 영상 링크를 붙여 넣어 주세요.")
+        return SourceRef("youtube", f"https://www.youtube.com/watch?v={video_id}", video_id,
+                         f"YouTube · {video_id}")
+    if host in {"soundcloud.com", "www.soundcloud.com", "m.soundcloud.com"}:
+        parts = [part for part in parsed.path.split("/") if part]
+        reserved = {"charts", "discover", "search", "stations", "stream", "you"}
+        collection_paths = {"albums", "likes", "popular-tracks", "reposts", "sets", "tracks"}
+        private_track = len(parts) == 3 and parts[2].startswith("s-")
+        if ((len(parts) != 2 and not private_track) or parts[0].casefold() in reserved
+                or parts[1].casefold() in collection_paths):
+            raise ValueError("SoundCloud 세트나 프로필이 아닌 단일 트랙 링크를 붙여 넣어 주세요.")
+        path = "/".join(parts)
+        return SourceRef("soundcloud", f"https://soundcloud.com/{path}", "", f"SoundCloud · {parts[0]}/{parts[1]}")
+    if host == "on.soundcloud.com" and re.fullmatch(r"/[A-Za-z0-9_-]+/?", parsed.path):
+        path = parsed.path.strip("/")
+        return SourceRef("soundcloud", f"https://on.soundcloud.com/{path}", "", "SoundCloud · 공유 링크")
+    raise ValueError("YouTube 또는 SoundCloud의 단일 곡 링크만 지원해요.")
+
+
+def youtube_url(value: str) -> tuple[str, str]:
+    """Backward-compatible YouTube-only parser used by older integrations."""
+    source = parse_media_url(value)
+    if source.platform != "youtube":
+        raise ValueError("This helper accepts YouTube links only.")
+    return source.url, source.source_id
 
 
 def clean(value) -> str:
     return " ".join(str(value or "").split())
 
 
-def metadata_from_video(info: dict, url: str, overrides: dict) -> dict[str, str]:
+def metadata_from_video(info: dict, url: str, overrides: dict, platform: str = "youtube") -> dict[str, str]:
+    service_name = "SoundCloud" if platform == "soundcloud" else "YouTube"
     raw_title = clean(info.get("title"))
     title = raw_title or clean(info.get("track"))
     # ponytail: title parsing is a heuristic; ambiguous credits need human review, not a database guess.
     suffix = r"\s*[\[(](?:official (?:music )?(?:video|audio)|lyric(?:s)? video|lyrics|visuali[sz]er|HD|4K)[\])]\s*$"
     title = re.sub(suffix, "", title, flags=re.I).strip()
     parts = re.split(r"\s+[-–—]\s+", title, maxsplit=1)
-    artist = clean(info.get("artist"))
-    method = "YouTube fields" if artist else "needs review"
+    listed_artists = info.get("artists") if isinstance(info.get("artists"), list) else []
+    artist = clean(info.get("artist")) or ", ".join(clean(value) for value in listed_artists if clean(value))
+    method = f"{service_name} fields" if artist else "needs review"
+    if platform == "soundcloud" and not artist:
+        artist = clean(info.get("uploader"))
+        method = "SoundCloud uploader (inferred)" if artist else "needs review"
     if len(parts) == 2 and all(parts):
         artist, title = parts
-        method = "video title (inferred)"
-    tags = {"artist": artist, "title": title, "album": "", "genre": ""}
+        method = f"{'track' if platform == 'soundcloud' else 'video'} title (inferred)"
+    genres = info.get("genres") if isinstance(info.get("genres"), list) else []
+    source_genre = ", ".join(clean(value) for value in genres if clean(value)) if platform == "soundcloud" else ""
+    tags = {"artist": artist, "title": title, "album": "", "genre": source_genre}
     tags.update({key: clean(value) for key, value in overrides.items() if key in tags and value is not None})
     # Content-ID can identify the original song underneath a remix. Do not borrow its album.
     if overrides.get("album") is None and tags["title"] and clean(info.get("track")).casefold() == tags["title"].casefold():
         tags["album"] = clean(info.get("album"))
     if any(value is not None for value in overrides.values()):
         method += "; manual override"
-    notes = [f"Source: {url}", f"Video title: {raw_title}", f"Metadata: {method}"]
+    notes = [f"Source: {url}", f"{'Track' if platform == 'soundcloud' else 'Video'} title: {raw_title}",
+             f"Metadata: {method}"]
     channel = clean(info.get("channel") or info.get("uploader"))
     if channel:
-        notes.append(f"Channel: {channel}")
+        notes.append(f"{'Uploader' if platform == 'soundcloud' else 'Channel'}: {channel}")
     missing = [field for field in ("artist", "title") if not tags[field]]
     if missing:
         notes.append(f"Review: missing {', '.join(missing)}")
@@ -100,7 +142,8 @@ def add_front_cover(id3: ID3, cover: Path | None) -> None:
     id3.add(APIC(encoding=1, mime="image/jpeg", type=3, desc="Cover", data=data))
 
 
-def embed_tags(path: Path, tags: dict, url: str, video_id: str, cover: Path | None = None) -> None:
+def embed_tags(path: Path, tags: dict, url: str, source_id: str, cover: Path | None = None,
+               platform: str = "youtube") -> None:
     try:
         id3 = ID3(path)
     except ID3NoHeaderError:
@@ -111,8 +154,14 @@ def embed_tags(path: Path, tags: dict, url: str, video_id: str, cover: Path | No
             id3.add(frame(encoding=1, text=tags[field]))
     id3.delall("COMM")
     id3.add(COMM(encoding=1, lang="eng", desc="", text=tags["comment"]))
+    id3.delall("WOAS")
     id3.add(WOAS(url=url))
-    id3.add(TXXX(encoding=1, desc="YouTube ID", text=video_id))
+    for description, value in (("Source Platform", platform), ("Source ID", source_id), ("Source URL", url)):
+        id3.delall(f"TXXX:{description}")
+        id3.add(TXXX(encoding=1, desc=description, text=value))
+    legacy_description = "YouTube ID" if platform == "youtube" else "SoundCloud ID"
+    id3.delall(f"TXXX:{legacy_description}")
+    id3.add(TXXX(encoding=1, desc=legacy_description, text=source_id))
     add_front_cover(id3, cover)
     id3.save(path, v2_version=3)
 
@@ -132,20 +181,22 @@ def browser_cookie_source(value: str | None):
     return (value, None, None, None) if value else None
 
 
-def download_source(url: str, stage: Path, on_progress=None, browser_cookies: str | None = None) -> tuple[dict, Path]:
-    runtime = next((name for name in ("deno", "node") if shutil.which(name)), None)
-    if runtime is None:
-        raise RuntimeError("YouTube needs Deno or Node.js. Install Node 22+ (or Deno) and try again.")
+def download_source(url: str, stage: Path, on_progress=None, browser_cookies: str | None = None,
+                    platform: str = "youtube") -> tuple[dict, Path]:
     options = {
         "format": "bestaudio/best",
         "outtmpl": str(stage).replace("%", "%%") + "/source.%(ext)s",
         "noplaylist": True,
         "match_filter": reject_live,
-        "js_runtimes": {runtime: {"path": shutil.which(runtime)}},
         "socket_timeout": 30,
         "writethumbnail": True,
     }
-    if cookies := browser_cookie_source(browser_cookies):
+    if platform == "youtube":
+        runtime = next((name for name in ("deno", "node") if shutil.which(name)), None)
+        if runtime is None:
+            raise RuntimeError("YouTube needs Deno or Node.js. Install Node 22+ (or Deno) and try again.")
+        options["js_runtimes"] = {runtime: {"path": shutil.which(runtime)}}
+    if platform == "youtube" and (cookies := browser_cookie_source(browser_cookies)):
         options["cookiesfrombrowser"] = cookies
     if on_progress:
         def progress(data):
@@ -276,39 +327,84 @@ def publish_file(source: Path, destination: Path) -> None:
             raise
 
 
+def embedded_source(path: Path) -> tuple[str, str, str]:
+    try:
+        tags = ID3(path)
+    except ID3NoHeaderError:
+        return "", "", ""
+    platform = str(tags.get("TXXX:Source Platform", "")).casefold()
+    source_id = str(tags.get("TXXX:Source ID", ""))
+    if not source_id:
+        if youtube_id := str(tags.get("TXXX:YouTube ID", "")):
+            platform, source_id = "youtube", youtube_id
+        elif soundcloud_id := str(tags.get("TXXX:SoundCloud ID", "")):
+            platform, source_id = "soundcloud", soundcloud_id
+    source_url = str(tags.get("TXXX:Source URL", ""))
+    if not source_url and (websites := tags.getall("WOAS")):
+        source_url = websites[0].url
+    return platform, source_id, source_url
+
+
+def existing_track(root: Path, source: SourceRef) -> Path | None:
+    for path in audio_files(root):
+        platform, source_id, source_url = embedded_source(path)
+        same_id = bool(source.source_id and platform == source.platform and source_id == source.source_id)
+        same_url = bool(source_url and source_url == source.url)
+        legacy_name = (source.platform == "youtube" and not source_id
+                       and path.name.endswith(f"[{source.source_id}].mp3"))
+        if same_id or same_url or legacy_name:
+            return path
+    return None
+
+
 def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, browser_cookies: str | None = None) -> Path:
-    url, video_id = youtube_url(value)
+    source_ref = parse_media_url(value)
     for binary in ("ffmpeg", "ffprobe"):
         if not shutil.which(binary):
             raise RuntimeError(f"Missing {binary}. Install FFmpeg first (macOS: brew install ffmpeg).")
     root = root.expanduser().resolve()
     root.mkdir(parents=True, exist_ok=True)
     with library_lock(root):
-        existing = None
-        for path in audio_files(root):
-            try:
-                embedded_id = str(ID3(path).get("TXXX:YouTube ID", ""))
-            except ID3NoHeaderError:
-                embedded_id = ""
-            if embedded_id == video_id or not embedded_id and path.name.endswith(f"[{video_id}].mp3"):
-                existing = path
-                break
+        existing = existing_track(root, source_ref)
         if existing:
             if on_progress:
-                on_progress({"status": "skipped", "path": str(existing), "title": existing.stem})
+                on_progress({"status": "skipped", "path": str(existing), "title": existing.stem,
+                             "source_id": source_ref.source_id, "source_platform": source_ref.platform})
             print(f"Already downloaded: {existing}\nTo correct tags, open the UI tag editor or use metadata.csv.")
             return existing
-        archive = root / "_sources" / video_id
-        if archive.exists():
-            raise RuntimeError(f"A source archive already exists at {archive}. Inspect it before retrying; nothing was overwritten.")
-        with tempfile.TemporaryDirectory(prefix=".youtube-", dir=root) as work:
+        if source_ref.platform == "youtube":
+            known_archive = root / "_sources" / source_ref.source_id
+            if known_archive.exists():
+                raise RuntimeError(f"A source archive already exists at {known_archive}. Inspect it before retrying; nothing was overwritten.")
+        with tempfile.TemporaryDirectory(prefix=".import-", dir=root) as work:
             stage = Path(work)
-            info, source = (download_source(url, stage, on_progress, browser_cookies)
-                            if on_progress or browser_cookies else download_source(url, stage))
+            info, source = download_source(source_ref.url, stage, on_progress, browser_cookies,
+                                           platform=source_ref.platform)
+            source_id = source_ref.source_id or clean(info.get("id"))
+            if not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source_id):
+                raise RuntimeError("The source returned an invalid track identifier.")
+            if source_ref.platform == "soundcloud" and info.get("webpage_url"):
+                try:
+                    final_ref = parse_media_url(str(info["webpage_url"]))
+                    source_ref = SourceRef("soundcloud", final_ref.url, source_id, final_ref.label)
+                except ValueError:
+                    source_ref = SourceRef("soundcloud", source_ref.url, source_id, source_ref.label)
+            else:
+                source_ref = SourceRef(source_ref.platform, source_ref.url, source_id, source_ref.label)
+            if existing := existing_track(root, source_ref):
+                if on_progress:
+                    on_progress({"status": "skipped", "path": str(existing), "title": existing.stem,
+                                 "source_id": source_id, "source_platform": source_ref.platform})
+                print(f"Already downloaded: {existing}\nTo correct tags, open the UI tag editor or use metadata.csv.")
+                return existing
+            archive_name = source_id if source_ref.platform == "youtube" else f"soundcloud-{source_id}"
+            archive = root / "_sources" / archive_name
+            if archive.exists():
+                raise RuntimeError(f"A source archive already exists at {archive}. Inspect it before retrying; nothing was overwritten.")
             thumbnail = find_thumbnail(stage, source)
-            music_cover = download_music_cover(video_id, stage)
+            music_cover = download_music_cover(source_id, stage) if source_ref.platform == "youtube" else None
             cover_source = music_cover or thumbnail
-            tags = metadata_from_video(info, url, overrides)
+            tags = metadata_from_video(info, source_ref.url, overrides, source_ref.platform)
             if on_progress:
                 on_progress({"status": "tagging", "progress": None, "title": tags["title"], "artist": tags["artist"]})
             mp3 = stage / "track.mp3"
@@ -316,7 +412,7 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
             cover = stage / "cover.jpg" if cover_source else None
             if cover_source and cover:
                 make_cover(cover_source, cover)
-            embed_tags(mp3, tags, url, video_id, cover)
+            embed_tags(mp3, tags, source_ref.url, source_id, cover, source_ref.platform)
             folder = "tracks" if tags["artist"] and tags["title"] else "_inbox"
             destination = root / folder / filename_for(tags)
             destination.parent.mkdir(exist_ok=True)
@@ -335,10 +431,12 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
                 "id", "title", "artist", "track", "album", "channel", "uploader", "upload_date",
                 "format_id", "ext", "acodec", "abr", "asr",
             )}
-            provenance.update(source_url=url, applied_tags=tags, source_filename=source.name,
+            provenance.update(source_platform=source_ref.platform, source_id=source_id, source_url=source_ref.url,
+                              applied_tags=tags, source_filename=source.name,
                               source_thumbnail_filename=thumbnail.name if thumbnail else None,
                               music_cover_filename=music_cover.name if music_cover else None,
-                              artwork_source="youtube_music" if music_cover else "youtube_video_thumbnail" if thumbnail else None,
+                              artwork_source=("youtube_music" if music_cover else
+                                              f"{source_ref.platform}_artwork" if thumbnail else None),
                               artwork_filename=str(artwork_destination.relative_to(root)) if artwork_destination else None)
             with (stage / "metadata.json").open("w", encoding="utf-8") as handle:
                 json.dump(provenance, handle, ensure_ascii=False, indent=2)
@@ -364,7 +462,8 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
                 raise
         if on_progress:
             on_progress({"status": "review" if folder == "_inbox" else "saved", "progress": 100,
-                         "path": str(destination), "title": tags["title"], "artist": tags["artist"]})
+                         "path": str(destination), "title": tags["title"], "artist": tags["artist"],
+                         "source_id": source_id, "source_platform": source_ref.platform, "url": source_ref.url})
         print(f"\nSaved: {destination}\nArtist: {tags['artist'] or '(needs review)'}\nTitle: {tags['title'] or '(needs review)'}")
         if artwork_destination:
             print(f"Artwork: {artwork_destination}")
@@ -376,7 +475,7 @@ def import_video(value: str, root: Path, overrides: dict, *, on_progress=None, b
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("url", nargs="?", help="Single YouTube video URL; prompts if omitted.")
+    parser.add_argument("url", nargs="?", help="Single YouTube video or SoundCloud track URL; prompts if omitted.")
     parser.add_argument("--root", "--output", type=Path, default=DEFAULT_ROOT, help=f"Library/download directory (default: {DEFAULT_ROOT}).")
     for field in ("artist", "title", "album", "genre"):
         parser.add_argument(f"--{field}", help=f"Override the {field} tag.")
@@ -385,7 +484,7 @@ def main() -> None:
                         help="Use a signed-in browser only for account-gated videos (chrome, firefox, safari, edge, brave).")
     args = parser.parse_args()
     try:
-        url = args.url or input("YouTube link: ").strip()
+        url = args.url or input("YouTube or SoundCloud track link: ").strip()
         print(f"Download directory: {args.root.expanduser().resolve()}")
         destination = import_video(url, args.root, {field: getattr(args, field) for field in ("artist", "title", "album", "genre")},
                                    browser_cookies=args.cookies_from_browser)

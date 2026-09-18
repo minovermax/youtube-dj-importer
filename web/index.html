@@ -27,8 +27,8 @@
         <section class="composer" aria-labelledby="add-title">
           <div class="section-heading"><h2 id="add-title">음악 가져오기</h2><span class="step-label">01 / ADD</span></div>
           <form id="import-form">
-            <div class="label-row"><label for="links">YouTube 링크</label><span id="link-count">0 / 50</span></div>
-            <textarea id="links" rows="7" placeholder="https://www.youtube.com/watch?v=…&#10;https://youtu.be/…&#10;&#10;한 줄에 링크 하나씩 붙여넣으세요." spellcheck="false" autocomplete="off" aria-describedby="links-help"></textarea>
+            <div class="label-row"><label for="links">YouTube · SoundCloud 링크</label><span id="link-count">0 / 50</span></div>
+            <textarea id="links" rows="7" placeholder="https://www.youtube.com/watch?v=…&#10;https://soundcloud.com/artist/track&#10;&#10;한 줄에 곡 링크 하나씩 붙여넣으세요." spellcheck="false" autocomplete="off" aria-describedby="links-help"></textarea>
             <p class="field-help" id="links-help">여러 곡을 한 번에. 중복 링크는 알아서 건너뛰어요.</p>
 
             <div class="folder-label"><label for="folder">저장 폴더</label><button type="button" class="text-button" id="choose-folder">폴더 선택</button></div>
@@ -75,11 +75,11 @@
   </template>
   <dialog id="tag-dialog" aria-labelledby="tag-heading" aria-describedby="tag-help">
     <header class="editor-heading"><div><p class="eyebrow">TRACK DETAILS</p><h2 id="tag-heading">태그 확인·수정</h2></div><button type="button" class="text-button" id="tag-close">닫기</button></header>
-    <p class="editor-help" id="tag-help">원본 영상의 제목·설명에서 실제 아티스트와 곡명을 확인해 주세요. 채널 이름이 아티스트 이름과 같지는 않을 수 있어요.</p>
+    <p class="editor-help" id="tag-help">원본 업로드의 제목·설명에서 실제 아티스트와 곡명을 확인해 주세요. 채널이나 업로더 이름이 아티스트 이름과 같지는 않을 수 있어요.</p>
     <p id="tag-loading" role="status">MP3에 저장된 정보를 불러오는 중…</p>
     <form id="tag-form">
       <fieldset id="tag-fields" disabled>
-        <div class="source-context"><span class="note-label">SOURCE</span><p id="tag-original"></p><a id="tag-source" target="_blank" rel="noopener noreferrer" hidden>원본 영상에서 확인 ↗</a><p id="tag-filename" class="editor-filename"></p></div>
+        <div class="source-context"><span class="note-label">SOURCE</span><p id="tag-original"></p><a id="tag-source" target="_blank" rel="noopener noreferrer" hidden>원본 업로드에서 확인 ↗</a><p id="tag-filename" class="editor-filename"></p></div>
         <p id="tag-csv-note" class="editor-help" hidden>메타데이터 표에 먼저 수정해 둔 값을 불러왔어요. 저장하면 MP3에도 반영돼요.</p>
         <div class="editor-grid">
           <div><label for="tag-artist">아티스트 <span class="required-label">필수</span></label><input id="tag-artist" name="artist" required maxlength="512" autocomplete="off" placeholder="실제 아티스트 이름"></div>

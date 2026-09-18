@@ -1,6 +1,6 @@
-# YouTube DJ Importer
+# YouTube + SoundCloud DJ Importer
 
-Paste one or several YouTube video links. Get tagged MP3s in a folder you choose, with the original downloaded sources preserved separately. Designed for a small local rekordbox library, including remixes that are not in music databases.
+Paste one or several YouTube video or SoundCloud track links. Get tagged MP3s in a folder you choose, with the original downloaded sources preserved separately. Designed for a small local rekordbox library, including remixes that are not in music databases.
 
 Use only for audio you own or have permission to download. This tool does not grant download or public-performance rights.
 
@@ -25,7 +25,7 @@ python3 -m venv .venv
 
 On macOS, double-click **Open minsmix.command**. A Korean-language browser UI opens locally at `http://127.0.0.1:8765`:
 
-1. Paste up to 50 video links, one per line.
+1. Paste up to 50 YouTube video or SoundCloud track links, one per line. You can mix both services in one batch.
 2. Choose a download folder with the native folder picker, or type its path.
 3. Start the batch. Track each download, open result folders, and retry failed items.
 
@@ -45,12 +45,15 @@ Launching the UI again reopens the existing instance. If another program occupie
 
 ### Single-link launcher and CLI
 
-On macOS, double-click **Download YouTube.command**. Choose a download folder or press Enter for `~/Music/minsmix`, then paste a link. Finder reveals the finished MP3. Run the launcher from this repository; do not move it away from the Python files.
+On macOS, double-click **Download YouTube.command** (it accepts both services). Choose a download folder or press Enter for `~/Music/minsmix`, then paste a link. Finder reveals the finished MP3. Run the launcher from this repository; do not move it away from the Python files.
 
 Or use the command line:
 
 ```sh
 .venv/bin/python youtube_import.py 'https://www.youtube.com/watch?v=VIDEO_ID'
+
+# SoundCloud single track
+.venv/bin/python youtube_import.py 'https://soundcloud.com/artist/track'
 
 # Choose any library/download folder
 .venv/bin/python youtube_import.py 'YOUTUBE_URL' --output '/path/to/DJ Music'
@@ -63,7 +66,7 @@ Or use the command line:
   --artist 'Artist Name' --title 'Song (DJ Remix)' --genre 'Drum & Bass'
 ```
 
-`--root` is an alias for `--output`. `--album` is also available. Omit the URL to paste it at a prompt. Add `--open` to reveal the result in Finder. Playlist parameters are discarded; only one video is downloaded. Live/upcoming streams are rejected. Repeating the same video ID skips the download; it does not retag the existing file.
+`--root` is an alias for `--output`. `--album` is also available. Omit the URL to paste it at a prompt. Add `--open` to reveal the result in Finder. YouTube playlists and SoundCloud sets/profiles are rejected; each link must identify one track. Live/upcoming streams are rejected. Repeating the same source track skips the download; it does not retag the existing file.
 
 ## What gets saved
 
@@ -72,27 +75,27 @@ your-download-folder/
   tracks/             tagged MP3s with Artist and Title
   _inbox/             MP3s missing Artist or Title, for review
   artwork/            separate JPG cover files matching the MP3 names
-  _sources/VIDEO_ID/  original source audio, thumbnail, and provenance JSON
+  _sources/SOURCE_ID/ original source audio, thumbnail, and provenance JSON
   metadata.csv        editable review sheet
 ```
 
-- **Artist / Title:** parsed from `Artist - Title`, retaining remix/edit names. Otherwise Artist comes from YouTube's structured artist field and Title from the video title. The channel/uploader is never used as the artist fallback. Title parsing is a heuristic, not verified song identification.
+- **Artist / Title:** parsed from `Artist - Title`, retaining remix/edit names. YouTube uses its structured artist field when available and never treats a channel as the artist. SoundCloud uses structured artist data, then the uploader as a marked inference when needed. Title parsing is a heuristic, not verified song identification.
 - **Album:** only taken from a structured YouTube album field when its track title matches the selected title. Unknown albums stay blank. No invented album or release year.
-- **Genre:** blank unless provided explicitly; no audio-based genre guessing.
-- **Comment:** source URL, original video title, channel, metadata provenance, and any missing-field warning. Source URL and video ID also get their own ID3 fields.
-- **Artwork:** the full-size square cover exposed by YouTube Music is preferred, embedded as the MP3 front cover, and also saved separately in `artwork/`. If a Music cover is unavailable, the best video thumbnail is used instead. Downloaded cover sources stay in `_sources`; verify unofficial uploads during review.
+- **Genre:** uses a genre explicitly supplied by SoundCloud when present; otherwise blank unless provided manually. There is no audio-based genre guessing.
+- **Comment:** source URL, original upload title, channel/uploader, metadata provenance, and any missing-field warning. Platform, source URL, and source ID also get their own ID3 fields.
+- **Artwork:** YouTube Music's full-size square cover is preferred; SoundCloud uses its largest supplied artwork. The image is embedded as the MP3 front cover and saved separately in `artwork/`. YouTube falls back to its best video thumbnail when needed. Downloaded cover sources stay in `_sources`; verify unofficial uploads during review.
 
-Filenames are `Artist - Title.mp3`, without a YouTube ID suffix. Different videos with the same name get a numeric suffix such as `(2)`. Duplicate downloads are recognized by the embedded YouTube ID, even after you rename a file. Legacy ID-suffixed filenames are also recognized.
+Filenames are `Artist - Title.mp3`, without a source-ID suffix. Different uploads with the same name get a numeric suffix such as `(2)`. Duplicate downloads are recognized by embedded platform and source IDs, even after you rename a file. Legacy YouTube ID-suffixed filenames are also recognized.
 
 The MP3 carries ID3v2.3 tags; metadata and artwork are not just sidecars. Upload date stays in provenance JSON, not the release-year tag. BPM, key detection, fingerprint lookup, and direct rekordbox-database changes are intentionally out of scope. Use rekordbox analysis for BPM/key and check beatgrids by ear.
 
-Quality: yt-dlp selects the best available audio stream. Non-MP3 sources are encoded once to 320 kbps MP3 for compatibility; an MP3 source is copied without re-encoding. **320 kbps does not restore detail lost by YouTube.** The original stream remains in `_sources` if you want it later. Prefer a creator's original WAV/AIFF/FLAC download for performance use when available. Browser cookies are not accessed unless you explicitly select a browser for an account-gated download.
+Quality: yt-dlp selects the best available audio stream, including a creator-enabled SoundCloud original download when available. Non-MP3 sources are encoded once to 320 kbps MP3 for compatibility; an MP3 source is copied without re-encoding. **320 kbps does not restore detail already lost by a streaming service.** The original stream remains in `_sources` if you want it later. Prefer a creator's original WAV/AIFF/FLAC download for performance use when available. Browser cookies are not accessed unless you explicitly select a browser for an account-gated YouTube download.
 
 ## Review or correct metadata
 
 In the UI, click **태그 확인하기** (or **태그 수정** on a saved track):
 
-1. Compare the original video title/link with the proposed tags. Use the performing artist, not necessarily the uploader; keep remix/edit credits in the title.
+1. Compare the original upload title/link with the proposed tags. Use the performing artist, not necessarily the uploader; keep remix/edit credits in the title.
 2. Enter Artist and Title. Album and Genre are optional; clearing them deliberately removes those tags.
 3. Click **확인하고 저장**. The MP3 and its CSV row are updated together, and reviewed `_inbox` files move to `tracks` without changing their basename.
 
@@ -122,10 +125,10 @@ Import files from `tracks` into rekordbox. If they were already imported, use re
 .venv/bin/python test_ui.py
 .venv/bin/python music_pipeline.py test
 
-# YouTube changes frequently; update the downloader if extraction breaks
+# YouTube and SoundCloud change frequently; update the downloader if extraction breaks
 .venv/bin/python -m pip install --upgrade 'yt-dlp[default]'
 ```
 
-The checks are offline and use generated audio, not copyrighted songs. YouTube may block some networks, videos, or automated requests; private, unavailable, age-restricted, or region-blocked videos may fail. No existing track is replaced on failure. Interrupted downloads are cleaned out of staging; if publishing an import is interrupted, inspect the named `_sources/VIDEO_ID` archive before retrying. If an MP3 exists but CSV writing failed, run `music_pipeline.py scan` to recover the sheet.
+The checks are offline and use generated audio, not copyrighted songs. A service may block some networks, tracks, or automated requests; private, unavailable, age-restricted, region-blocked, or login-only media may fail. No existing track is replaced on failure. Interrupted downloads are cleaned out of staging; if publishing an import is interrupted, inspect the named `_sources/SOURCE_ID` archive before retrying. If an MP3 exists but CSV writing failed, run `music_pipeline.py scan` to recover the sheet.
 
 Built on [yt-dlp](https://github.com/yt-dlp/yt-dlp), [FFmpeg](https://ffmpeg.org/) and [Mutagen](https://mutagen.readthedocs.io/). Local audio, metadata sheets, browser cookies and the virtual environment are excluded from Git.

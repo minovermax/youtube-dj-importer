@@ -162,10 +162,25 @@ def write_tags(path: Path, row: dict[str, str], overwrite: bool, *, clear_empty:
 EDIT_FIELDS = ("artist", "title", "album", "genre")
 
 
-def resolve_track(root: Path, filename: str, video_id: str = "") -> Path:
-    """Resolve only library MP3s, recovering a renamed download by its embedded video ID."""
-    if not isinstance(filename, str) or not filename or not isinstance(video_id, str):
+def source_identity(tags: dict[str, str]) -> tuple[str, str]:
+    platform = tags.get("source platform", "").casefold()
+    source_id = tags.get("source id", "")
+    if not source_id and tags.get("youtube id"):
+        return "youtube", tags["youtube id"]
+    if not source_id and tags.get("soundcloud id"):
+        return "soundcloud", tags["soundcloud id"]
+    return platform, source_id
+
+
+def resolve_track(root: Path, filename: str, source_id: str = "", source_platform: str = "") -> Path:
+    """Resolve only library MP3s, recovering a renamed download by its embedded source ID."""
+    if (not isinstance(filename, str) or not filename or not isinstance(source_id, str)
+            or not isinstance(source_platform, str)):
         raise ValueError("편집할 곡을 선택해 주세요.")
+    if source_id and not re.fullmatch(r"[A-Za-z0-9_-]{1,128}", source_id):
+        raise ValueError("원본 곡 식별자가 올바르지 않아요.")
+    if source_platform not in {"", "youtube", "soundcloud"}:
+        raise ValueError("원본 서비스 식별자가 올바르지 않아요.")
     path = Path(filename)
     if not path.is_absolute():
         path = root / path
@@ -175,11 +190,17 @@ def resolve_track(root: Path, filename: str, video_id: str = "") -> Path:
     relative = path.relative_to(root)
     if path.suffix.lower() != ".mp3" or any(p.startswith(".") or p == "_sources" for p in relative.parts):
         raise ValueError("라이브러리의 MP3 파일만 편집할 수 있어요.")
-    if path.is_file() and (not video_id or probe_tags(path).get("youtube id") == video_id):
-        return path
-    if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
-        matches = [p for p in audio_files(root) if p.resolve().is_relative_to(root)
-                   and probe_tags(p).get("youtube id") == video_id]
+    if path.is_file():
+        embedded_platform, embedded_id = source_identity(probe_tags(path))
+        if not source_id or (embedded_id == source_id and (not source_platform or embedded_platform == source_platform)):
+            return path
+    if source_id:
+        matches = []
+        for candidate in audio_files(root):
+            embedded_platform, embedded_id = source_identity(probe_tags(candidate))
+            if (candidate.resolve().is_relative_to(root) and embedded_id == source_id
+                    and (not source_platform or embedded_platform == source_platform)):
+                matches.append(candidate)
         if len(matches) == 1:
             return matches[0]
     raise ValueError("파일이 이동되었거나 없어요. ‘라이브러리 불러오기’로 목록을 새로고침해 주세요.")
@@ -189,21 +210,27 @@ def track_review(root: Path, path: Path) -> dict:
     tags = probe_tags(path)
     manifest = load_manifest(root / MANIFEST_NAME)
     name = path.name
-    video_id = tags.get("youtube id", "")
-    if name not in manifest and re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id):
-        matches = [key for key, row in manifest.items() if f"watch?v={video_id}" in row.get("comment", "")]
+    platform, source_id = source_identity(tags)
+    comment = tags.get("comment", "")
+    source_match = re.search(r"(?:^| \| )Source: (https://\S+?)(?= \| |$)", comment)
+    source_url = tags.get("source url", "") or (source_match.group(1) if source_match else "")
+    if not source_url and platform == "youtube" and re.fullmatch(r"[A-Za-z0-9_-]{11}", source_id):
+        source_url = f"https://www.youtube.com/watch?v={source_id}"
+    if name not in manifest and source_url:
+        matches = [key for key, row in manifest.items() if f"Source: {source_url}" in row.get("comment", "")]
         if len(matches) == 1:
             name = matches[0]
     row = manifest.get(name, {})
     values = {field: row.get(field, tags.get(field, "")) for field in EDIT_FIELDS}
     stat = path.stat()
     revision = hashlib.sha256(json.dumps([str(path), stat.st_ino, stat.st_mtime_ns, stat.st_size, tags, row], sort_keys=True).encode()).hexdigest()
-    comment = tags.get("comment", "")
-    url = f"https://www.youtube.com/watch?v={video_id}" if re.fullmatch(r"[A-Za-z0-9_-]{11}", video_id) else ""
-    title = comment.partition("Video title: ")[2].split(" | Metadata:", 1)[0]
+    title_match = re.search(r"(?:Video|Track|Source) title: (.*?)(?= \| Metadata:|$)", comment)
+    original_title = title_match.group(1) if title_match else ""
     pending = bool(row) and any(values[field] != tags.get(field, "") for field in EDIT_FIELDS)
-    return {"root": str(root), "path": str(path), "revision": revision, "tags": values, "video_id": video_id,
-            "source_url": url, "video_title": title, "csv_pending": pending,
+    video_id = source_id if platform == "youtube" else ""
+    return {"root": str(root), "path": str(path), "revision": revision, "tags": values,
+            "source_id": source_id, "source_platform": platform, "video_id": video_id,
+            "source_url": source_url, "video_title": original_title, "csv_pending": pending,
             "status": "review" if path.relative_to(root).parts[0] == "_inbox" or pending or not tags.get("artist") or not tags.get("title") else "saved"}
 
 

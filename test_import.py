@@ -25,6 +25,10 @@ def check():
     url = "https://www.youtube.com/watch?v=BaW_jenozKc"
     assert importer.youtube_url("https://youtu.be/BaW_jenozKc?list=IGNORE&t=12") == (url, "BaW_jenozKc")
     assert importer.youtube_url("https://www.youtube.com/shorts/BaW_jenozKc")[1] == "BaW_jenozKc"
+    soundcloud_url = "https://soundcloud.com/ethmusic/lostin-powers-she-so-heavy"
+    soundcloud = importer.parse_media_url(soundcloud_url + "?si=tracking&utm_source=clipboard")
+    assert soundcloud.platform == "soundcloud" and soundcloud.url == soundcloud_url and soundcloud.source_id == ""
+    assert importer.parse_media_url("https://on.soundcloud.com/AbC123").platform == "soundcloud"
     for invalid in ("file:///etc/passwd", "https://youtube.com.evil.example/watch?v=BaW_jenozKc", "https://youtube.com/playlist?list=x"):
         try:
             importer.youtube_url(invalid)
@@ -32,6 +36,14 @@ def check():
             pass
         else:
             raise AssertionError(f"Accepted invalid URL: {invalid}")
+    for invalid in ("https://soundcloud.com/artist", "https://soundcloud.com/artist/sets/mixes",
+                    "https://soundcloud.com/artist/tracks"):
+        try:
+            importer.parse_media_url(invalid)
+        except ValueError:
+            pass
+        else:
+            raise AssertionError(f"Accepted a non-track SoundCloud URL: {invalid}")
     info = {"id": "BaW_jenozKc", "title": "가수 - Song (DJ Remix) [Official Audio]", "artist": "Original Artist",
             "track": "Song", "album": "Original Album", "channel": "Repost channel"}
     tags = importer.metadata_from_video(info, url, {})
@@ -41,6 +53,13 @@ def check():
     assert importer.metadata_from_video({**info, "title": "Artist - Song"}, url, {"title": "Song (Remix)"})["album"] == ""
     assert importer.metadata_from_video({"title": "Unknown song", "uploader": "Not the artist"}, url, {})["artist"] == ""
     assert importer.metadata_from_video(info, url, {"artist": "DJ", "genre": "DnB"})["artist"] == "DJ"
+    soundcloud_info = {"id": "62986583", "title": "Lostin Powers - She so Heavy (SneakPreview)",
+                       "track": "Lostin Powers - She so Heavy (SneakPreview)",
+                       "uploader": "E.T. ExTerrestrial Music", "genres": ["Electronic"]}
+    soundcloud_tags = importer.metadata_from_video(soundcloud_info, soundcloud_url, {}, "soundcloud")
+    assert soundcloud_tags["artist"] == "Lostin Powers"
+    assert soundcloud_tags["title"] == "She so Heavy (SneakPreview)"
+    assert soundcloud_tags["genre"] == "Electronic" and "Track title:" in soundcloud_tags["comment"]
     assert importer.reject_live({"is_live": True})
     assert not importer.reject_live({"live_status": "was_live"})
     assert importer.browser_cookie_source("chrome") == ("chrome", None, None, None)
@@ -66,7 +85,7 @@ def check():
     with tempfile.TemporaryDirectory(prefix="youtube-dj-test-") as work:
         root = Path(work).resolve()
 
-        def fake_download(_url, stage):
+        def fake_download(_url, stage, *_args, **_kwargs):
             source = stage / "source.m4a"
             subprocess.run(
                 ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=440:duration=0.2",
@@ -147,7 +166,32 @@ def check():
         assert audio_hash(path) == before
         assert url in pipeline.probe_tags(path)["comment"]
 
-        def unknown_download(_url, stage):
+        def fake_soundcloud_download(_url, stage, *_args, **_kwargs):
+            source = stage / "source.m4a"
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "sine=frequency=550:duration=0.2",
+                 "-c:a", "aac", str(source)], check=True,
+            )
+            subprocess.run(
+                ["ffmpeg", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=120x120",
+                 "-frames:v", "1", str(stage / "source.jpg")], check=True,
+            )
+            return {**soundcloud_info, "webpage_url": soundcloud_url}, source
+
+        with patch.object(importer, "download_source", side_effect=fake_soundcloud_download) as soundcloud_download:
+            soundcloud_path = importer.import_video(soundcloud_url, root, {})
+            assert soundcloud_path.name == "Lostin Powers - She so Heavy (SneakPreview).mp3"
+            soundcloud_id3 = ID3(soundcloud_path)
+            assert str(soundcloud_id3["TXXX:Source Platform"]) == "soundcloud"
+            assert str(soundcloud_id3["TXXX:Source ID"]) == "62986583"
+            assert str(soundcloud_id3["TXXX:SoundCloud ID"]) == "62986583"
+            assert str(soundcloud_id3["TCON"]) == "Electronic"
+            assert (root / "artwork" / "Lostin Powers - She so Heavy (SneakPreview).jpg").exists()
+            assert (root / "_sources" / "soundcloud-62986583" / "source.m4a").exists()
+            assert importer.import_video(soundcloud_url + "?si=another", root, {}) == soundcloud_path
+            assert soundcloud_download.call_count == 1
+
+        def unknown_download(_url, stage, *_args, **_kwargs):
             source = stage / "source.mp3"
             shutil.copy2(path, source)
             return {"id": "aqz-KE-bpKQ", "title": "Unknown song", "channel": "Uploader"}, source
@@ -166,10 +210,10 @@ def check():
                 pass
             else:
                 raise AssertionError("A failed download appeared successful")
-        assert not list(root.glob(".youtube-*"))
-        assert len(pipeline.audio_files(root)) == 3
+        assert not list(root.glob(".import-*"))
+        assert len(pipeline.audio_files(root)) == 4
         assert audio_hash(path) == before
-    print("PASS: URL validation, remix metadata, artwork, Unicode filenames, ID3, audio conversion/copy, duplicate protection, CSV review, inbox routing, failure cleanup.")
+    print("PASS: YouTube/SoundCloud URL validation, remix metadata, artwork, Unicode filenames, source IDs, audio conversion/copy, duplicate protection, CSV review, inbox routing, failure cleanup.")
 
 
 if __name__ == "__main__":

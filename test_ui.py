@@ -15,7 +15,7 @@ import ui_server
 import music_pipeline
 from mutagen.id3 import GEOB, ID3
 from test_import import audio_hash
-from youtube_import import embed_tags
+from youtube_import import embed_tags, parse_media_url
 
 
 def check():
@@ -30,24 +30,27 @@ def check():
         cookie_calls = []
 
         def fake_import(url, folder, overrides, *, on_progress, browser_cookies=None):
-            video_id = url.split("v=")[1]
-            calls.append(video_id)
+            source = parse_media_url(url)
+            source_id = source.source_id or "62986583"
+            calls.append(source_id)
             cookie_calls.append(browser_cookies)
-            attempts[video_id] = attempts.get(video_id, 0) + 1
-            if video_id == "aaaaaaaaaaa":
+            attempts[source_id] = attempts.get(source_id, 0) + 1
+            if source_id == "aaaaaaaaaaa":
                 entered.set()
                 assert release.wait(10), "Test did not release the worker"
-            if video_id == "bbbbbbbbbbb" and attempts[video_id] == 1:
+            if source_id == "bbbbbbbbbbb" and attempts[source_id] == 1:
                 raise RuntimeError("Simulated unavailable video")
             on_progress({"status": "downloading", "progress": 50, "title": '<script>alert("no")</script>'})
             on_progress({"status": "tagging", "progress": None})
-            folder = folder / ("_inbox" if video_id == "ccccccccccc" else "tracks")
+            folder = folder / ("_inbox" if source_id == "ccccccccccc" else "tracks")
             folder.mkdir(exist_ok=True)
-            path = folder / f"test [{video_id}].mp3"
+            path = folder / f"test [{source_id}].mp3"
             shutil.copy2(tone, path)
-            embed_tags(path, {"artist": "" if video_id == "ccccccccccc" else "Artist", "title": "Original (Remix)",
-                             "album": "Unverified album", "genre": "", "comment": f"Source: {url} | Video title: Original (Remix) | Metadata: needs review | Review: missing artist"}, url, video_id)
-            on_progress({"status": "review" if video_id == "ccccccccccc" else "saved", "path": str(path)})
+            embed_tags(path, {"artist": "" if source_id == "ccccccccccc" else "Artist", "title": "Original (Remix)",
+                             "album": "Unverified album", "genre": "", "comment": f"Source: {url} | {'Track' if source.platform == 'soundcloud' else 'Video'} title: Original (Remix) | Metadata: needs review | Review: missing artist"},
+                       url, source_id, platform=source.platform)
+            on_progress({"status": "review" if source_id == "ccccccccccc" else "saved", "path": str(path),
+                         "source_id": source_id, "source_platform": source.platform, "url": url})
             return path
 
         with patch.object(ui_server, "import_video", side_effect=fake_import):
@@ -172,6 +175,22 @@ def check():
                 assert server.batch.snapshot()["jobs"] == []
                 assert len(music_pipeline.audio_files(root)) == 4, "Clearing history must not delete audio or scan backups"
 
+                code, body, _ = request("/api/add", {
+                    "links": ("https://soundcloud.com/ethmusic/lostin-powers-she-so-heavy?si=tracking\n"
+                              "https://soundcloud.com/ethmusic/lostin-powers-she-so-heavy?utm_source=clipboard"),
+                    "root": str(root),
+                })
+                assert code == 200 and json.loads(body) == {"accepted": 1, "duplicates": 1, "invalid": []}
+                wait_idle()
+                soundcloud_job = server.batch.snapshot()["jobs"][-1]
+                assert soundcloud_job["status"] == "saved"
+                assert soundcloud_job["source_platform"] == "soundcloud" and soundcloud_job["source_id"] == "62986583"
+                soundcloud_review = json.loads(request("/api/tag-read", {"root": str(root), "path": soundcloud_job["path"],
+                                                                          "source_id": "62986583", "source_platform": "soundcloud"})[1])
+                assert soundcloud_review["source_platform"] == "soundcloud"
+                assert soundcloud_review["source_url"] == "https://soundcloud.com/ethmusic/lostin-powers-she-so-heavy"
+                assert request("/api/clear", {})[0] == 200
+
                 entered.clear()
                 release.clear()
                 request("/api/add", {"links": "https://youtu.be/aaaaaaaaaaa\nhttps://youtu.be/ddddddddddd", "root": str(root)})
@@ -190,7 +209,7 @@ def check():
                 server.shutdown()
                 server.server_close()
                 serving.join(timeout=5)
-    print("PASS: HTTP auth, path boundaries, queue/retry/cancel, tag editing, blank album removal, source/cue preservation, unchanged audio, per-file CSV sync, backup/rollback, stale-edit protection, renamed-file recovery.")
+    print("PASS: HTTP auth, YouTube/SoundCloud queueing, path boundaries, retry/cancel, tag editing, source/cue preservation, unchanged audio, CSV sync, backup/rollback, stale-edit protection, renamed-file recovery.")
 
 
 if __name__ == "__main__":

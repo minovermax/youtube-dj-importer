@@ -68,14 +68,15 @@ function render(state) {
     }
     row.dataset.state = job.status;
     row.querySelector(".job-number").textContent = String(index + 1).padStart(2, "0");
-    row.querySelector(".job-title").textContent = job.title || "YouTube 오디오";
+    row.querySelector(".job-title").textContent = job.title || "가져온 오디오";
     const percent = job.status === "downloading" && job.progress !== null ? ` ${job.progress}%` : "";
     row.querySelector(".job-status").textContent = labels[job.status] + percent;
     const editable = Boolean(job.path) && !active.has(job.status);
     row.querySelector(".job-status").disabled = !editable;
     row.querySelector(".job-edit").hidden = !editable;
     row.querySelector(".job-edit").textContent = job.status === "review" ? "태그 확인하기" : "태그 수정";
-    const detail = job.status === "queued" ? "앞의 곡이 끝나면 자동으로 시작해요" : job.status === "tagging" ? "MP3로 변환하고 메타데이터를 기록하고 있어요" : job.status === "review" ? "원본을 확인하고 태그를 저장해 주세요" : job.status === "skipped" ? "같은 영상의 파일이 있어 건너뛰었어요" : job.status === "cancelled" ? "다운로드 전 대기 목록에서 취소했어요" : job.artist || (job.status === "downloading" ? "YouTube에서 최상의 오디오 소스를 가져오는 중" : "");
+    const service = job.source_platform === "soundcloud" ? "SoundCloud" : "YouTube";
+    const detail = job.status === "queued" ? "앞의 곡이 끝나면 자동으로 시작해요" : job.status === "tagging" ? "MP3로 변환하고 메타데이터를 기록하고 있어요" : job.status === "review" ? "원본을 확인하고 태그를 저장해 주세요" : job.status === "skipped" ? "같은 곡의 파일이 있어 건너뛰었어요" : job.status === "cancelled" ? "다운로드 전 대기 목록에서 취소했어요" : job.artist || (job.status === "downloading" ? `${service}에서 최상의 오디오 소스를 가져오는 중` : "");
     row.querySelector(".job-detail").textContent = detail;
     const progress = row.querySelector(".job-progress");
     progress.hidden = !["downloading", "tagging"].includes(job.status);
@@ -140,7 +141,7 @@ $("#import-form").addEventListener("submit", async (event) => {
     rememberFolder();
     const notices = [`${result.accepted}곡을 다운로드 목록에 추가했어요.`];
     if (result.duplicates) notices.push(`중복 링크 ${result.duplicates}개는 건너뛰었어요.`);
-    if (result.invalid.length) notices.push(`확인이 필요한 링크 ${result.invalid.length}개는 입력창에 남겨뒀어요. YouTube 영상 링크인지 확인해 주세요.`);
+    if (result.invalid.length) notices.push(`확인이 필요한 링크 ${result.invalid.length}개는 입력창에 남겨뒀어요. YouTube 영상 또는 SoundCloud 단일 트랙 링크인지 확인해 주세요.`);
     message(notices.join("\n"), result.invalid.length > 0);
     await refresh();
   } catch (error) { message(error.message, true); }
@@ -216,12 +217,12 @@ async function openEditor(job) {
   $("#tag-csv-note").hidden = true;
   $("#tag-dialog").showModal();
   try {
-    const videoId = job.url ? new URL(job.url).searchParams.get("v") || "" : "";
-    const result = await api("tag-read", {root: job.root, path: job.path, video_id: videoId});
+    const sourceId = job.source_id || (job.url ? new URL(job.url).searchParams.get("v") || "" : "");
+    const result = await api("tag-read", {root: job.root, path: job.path, source_id: sourceId, source_platform: job.source_platform || ""});
     if (request !== editorSerial || !$("#tag-dialog").open) return;
     editing = result;
     for (const field of ["artist", "title", "album", "genre"]) $(`#tag-${field}`).value = result.tags[field] || "";
-    $("#tag-original").textContent = result.video_title || "저장된 원본 영상 제목이 없어요. 파일명과 보유한 곡 정보를 확인해 주세요.";
+    $("#tag-original").textContent = result.video_title || "저장된 원본 제목이 없어요. 파일명과 보유한 곡 정보를 확인해 주세요.";
     $("#tag-filename").textContent = result.path.split("/").pop();
     $("#tag-source").hidden = !result.source_url;
     $("#tag-source").href = result.source_url;
@@ -249,7 +250,7 @@ $("#tag-form").addEventListener("submit", async (event) => {
   $("#tag-save").textContent = "저장 중…";
   editorError("");
   try {
-    const result = await api("tag-save", {root: editing.root, path: editing.path, video_id: editing.video_id, revision: editing.revision, tags});
+    const result = await api("tag-save", {root: editing.root, path: editing.path, source_id: editing.source_id, source_platform: editing.source_platform, revision: editing.revision, tags});
     $("#tag-dialog").close();
     message(`‘${result.tags.title}’ 태그를 MP3와 CSV에 저장했어요.${result.path !== result.previous_path ? " tracks 폴더로 옮겼어요." : ""} 수정 전 파일은 .tag-backups에 보관했어요.`);
     await refresh();

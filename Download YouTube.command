@@ -11,7 +11,7 @@ if [[ ! -x .venv/bin/python ]]; then
   read '?Press Enter to close.'
   exit 1
 fi
-print 'YouTube → tagged MP3'
+print 'YouTube / SoundCloud → tagged MP3'
 print 'Use music you own or have permission to download.'
 print 'Default download folder: ~/Music/minsmix'
 read 'destination?Download folder (Enter for default): '

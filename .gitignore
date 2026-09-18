@@ -19,6 +19,7 @@ metadata.csv
 .music.lock
 .tag-backups/
 .youtube-*/
+.import-*/
 _sources/
 _inbox/
 tracks/
